@@ -1,0 +1,170 @@
+# 01: Manipulating Time-Series Data With `tsibble`  
+
+<br>
+
+---
+
+<br>
+
+# `tsibble` Objects
+
+```{r, warning=FALSE, message=FALSE}
+library(tsibble)
+library(dplyr)
+library(lubridate)
+```
+
+A **time-series** is a sequence of real-values, indexed by some notion of time. A time-series can be represented by a `tsibble` object, which is defined by the time index and the sequence of values.
+
+```{r}
+time <- c("2024-01-01", "2024-02-01", "2024-03-01", "2024-04-01", 
+          "2024-05-01", "2024-06-01", "2024-07-01", "2024-08-01")
+
+sales <- c(123, 234, 158, 145, 
+           288, 198, 193, 62)
+
+revenue <- c(100502, 230404, 151001, 134104,
+             300034, 201008, 198882, 75804)
+
+
+data <- tsibble(
+  month = yearmonth(time), # create a month column to use as index
+  sales = sales, # the value of the time-series
+  revenue = revenue, # the value of another time-series
+  index = month, # we can directly declare that 'month' should be the index
+)
+
+data
+```
+
+Notice the header says `8 x 3 [1M]` indicating that `tsibble` was able to infer the structure of the time-series data: 8 rows x 3 columns, with time-steps of 1-month. This highlights the main point of using `tsibble` objects: they store all the relevant metadata associated with time-series. This makes it easy to apply time-specific manipulations that would normally be very tedious for a normal `tibble` object.
+
+`tsibble` objects behave like regular `tibble` objects, which means we can manipulate their data using `dplyr` verbs:
+
+```{r}
+data %>% 
+  mutate(
+    is_revenue_more_than_200 = ifelse(revenue > 200000, 1, 0)
+  )
+```
+
+```{r}
+data %>% 
+  select(sales) %>% 
+  filter(
+    sales > 150
+  )
+```
+
+Finally, a regular `tibble` object can be converted into a `tsibble` object using the `as_tsibble()` function:
+
+```{r}
+time <- c("2024-01-01", "2024-02-01", "2024-03-01", "2024-04-01", 
+          "2024-05-01", "2024-06-01", "2024-07-01", "2024-08-01")
+
+sales <- c(123, 234, 158, 145, 
+           288, 198, 193, 62)
+
+revenue <- c(100502, 230404, 151001, 134104,
+             300034, 201008, 198882, 75804)
+
+# store our data in a tibble object
+data_tibble <- tibble(
+  date = time,
+  sales = sales,
+  revenue = revenue
+)
+
+data_tibble
+```
+
+```{r}
+# convert our tibble object into a tsibble object
+data <- data_tibble %>% 
+  mutate(
+    month = yearmonth(date) # coerce the char column 'date' into month-type
+  ) %>% 
+  select(
+    -date # don't need this column anymore
+  ) %>% 
+  select(
+    month, # rearrange columns for readability
+    everything()
+  ) %>% 
+  as_tsibble(
+    index = month # which column is the time-index?
+  )
+
+data
+```
+
+<br>
+
+---
+
+<br>
+
+# Time-Series Plots
+
+A **time-series plot** is a graph of a time-series' values across time. We can do this directly by using the `ggplot2` package:
+
+```{r}
+data %>% 
+  ggplot(aes(x = month, y = sales)) + 
+  geom_line()
+```
+
+However, notice that we have to specify the `month` as the x-axis. Since a `tsibble` object knows which column is the time-index, it would be great if our `tsibble` object could pass this metadata along to a plotting function and automatically set the x-axis as `month`. Thankfully, time-series packages like `feasts` and `fabletools` both come with an `autoplot` function that does just this
+
+```{r}
+data %>% 
+  feasts::autoplot(sales)
+```
+
+The `autoplot` function returns a `ggplot` object, which means we can manipulate the graphic like a normal `ggplot`:
+
+```{r}
+data %>% 
+  feasts::autoplot(sales) + 
+  geom_hline(yintercept = mean(data$sales), linetype = "dashed")
+```
+
+# The `fpp3` Package
+
+We will need to load actual time-series datasets to study as well as various different libraries for manipulating time-series data like `tsibble`, `dplyr`, `feasts`, etc. This can all be done with a single library called `fpp3` which is a companion package to the textbook Forecasting: Principals and Practices (3rd Edition):
+
+```{r}
+library(fpp3)
+```
+
+```{r}
+# fpp3 will automatically load time-series datasets as tsibble objects
+# for example: the 'PBS' dataset contains monthly Australian Medicare
+# prescription data
+PBS
+```
+
+```{r}
+# various libraries like tsibble, dplyr, and feasts
+# are also automatically loaded with fpp3
+PBS %>% 
+  filter(ATC2 == "A10") %>% 
+  autoplot(Cost)
+```
+
+Notice that the data automatically gets grouped by the various combinations of `Concession`, `Type`, `ATC1`, and `ATC2` values. These columns are examples of **key columns** which represent specific dimensions the data can be aggregated or sliced by.
+
+```{r}
+PBS %>% 
+  filter(ATC2 == "A10") %>% 
+  summarise(
+    total_cost = sum(Cost)
+  ) %>% 
+  autoplot(total_cost)
+```
+
+<br>
+
+---
+
+<br>
