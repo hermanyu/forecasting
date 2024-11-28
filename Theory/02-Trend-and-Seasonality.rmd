@@ -1,0 +1,107 @@
+# Trend And Seasonality
+
+<br>
+
+---
+
+<br>
+
+**Forecasting** is the process of generating predictions at time $t$ for values of a time-series at times $t+1$, $t+2$, etc.
+
+```{r}
+options(scipen = 999)
+
+library(fpp3) # library for Forecasting: Principles and Practices 3rd edition
+
+# The PBS dataset is loaded by fpp3
+# We split the data into a "training" set
+# representing historical data we have observed
+# and a "test" set representing unobserved future values
+A10_observed <- PBS %>% 
+  filter(
+    ATC2 == "A10"
+  ) %>% 
+  summarise(
+    total_cost = sum(Cost)
+  ) %>% 
+  filter(
+    Month <= yearmonth('2005-12-01')
+  )
+
+A10_future <- PBS %>% 
+  filter(
+    ATC2 == "A10"
+  ) %>% 
+  summarise(
+    total_cost = sum(Cost)
+  ) %>% 
+  filter(
+    Month > yearmonth('2005-12-01')
+  )
+```
+
+Forecasting typically involves studying observed values of the time-series to find "features" (aka patterns) that we can use to generate predictions. One basic feature of any time-series is the **trend**, which is the general direction the time-series is moving in.
+
+```{r}
+A10_observed %>% 
+  autoplot(total_cost)
+```
+
+We observe that this time-series data for total A10 cost is going up over time. The rate of increase seems to indicate an exponential trend. To estimate an "exponential curve of best fit", we can take the logarithm of the data and fit a simple linear regression:
+
+```{r}
+log_cost_data <- A10_observed %>% 
+  mutate(
+    log_cost = log(total_cost)
+  )
+
+log_cost_data %>% 
+  autoplot(log_cost)
+```
+
+```{r}
+model <- lm(
+  log_cost ~ Month,
+  data = log_cost_data
+)
+
+summary(model)
+```
+
+```{r}
+results_data <- A10_future %>% 
+  mutate(
+    log_cost = log(total_cost)
+  )
+
+results_data$prediction <- exp(predict(model, results_data))
+
+results_data <- results_data %>% 
+  mutate(
+    residual = total_cost - prediction
+  )
+
+results_data %>% 
+  select(
+    Month,
+    total_cost,
+    prediction
+  ) %>% 
+  pivot_longer(
+    cols = c(total_cost, prediction),
+    names_to = "metric",
+    values_to = "value"
+  ) %>% 
+  as_tsibble(
+    key = metric,
+    index = Month
+  ) %>% 
+  autoplot(value)
+
+results_data %>% 
+  autoplot(residual)
+
+print(sqrt(sum((results_data$residual)^2)))
+```
+
+
