@@ -1,0 +1,325 @@
+---
+title: Survey Of Forecasting Methods
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: true
+---
+
+# Introduction
+
+**Forecasting** is the process of generating predictions for unobserved future values of a time-series $Y_t$. At it's core, forecasting can be distilled down to a 3-step process:
+
+1) Find and extract patterns in previously observed data. This typically involves studying the various **features** of a time-series in order to build a model that captures all the features.
+2) Make assumptions on which patterns will hold for future data. This typically involves quantitative theory (e.g. cross-validation) and qualitative domain theory (e.g. trends or shifts in market conditions).
+3) Use the assumed persistent patterns as predictors for future data.
+
+Step 1 can range from simple rules-based associations to highly obfuscated features extracted by a deep learning model. We provide a survey of various time-series features and corresponding models.
+
+<br>
+
+---
+
+<br>
+
+# Rules Based Models
+
+**Business rules** are features defined by domain knowledge or qualitative methods. For example: an analyst might know from domain knowledge or survey data that gym membership subscriptions are a leading indicator for running shoe sales, at some long-run average rate of 0.25 pairs of running shoes sold per gym membership subscription in the previous month. This can be used to define a model
+
+$$Y_t = 0.25X_{t-1}$$
+
+where $Y_t$ is running shoes sold in month $t$ and $X_{t-1}$ is gym membership subscriptions at month $t-1$. Exploratory data analysis can be used to build out these rules qualitatively.
+
+The main benefit of rules-based models is their flexibility. Rules-based models allow for forecasts to account for variables that are hard to quantify or observe directly. Using running shoe sales as an example, consumer can start becoming more health conscience over time, leading to increased demand for running shoes. This shift in consumer sentiment would be incredibly hard to quantify making it extremely difficult for mathematical models to encode such an obvious idea. With a rules-based model, it would be easy to encode such idea: just increase our previous year's demand by $x$ percent for various levels $x$ to simulate a few different possibilities.
+
+The main drawback of rules-based models is that they are composed entirely of assumptions made by the modeler. The assumptions made by the modeler are typically well-founded but the main challenge here is:
+
+1) Every additional piece of complexity must be built-in manually by the modeler instead of automatically learned from the data. This makes it incredibly tedious to account for all the important features needed to generate a forecast.
+
+2) Features which cannot be easily extracted from EDA will remain hidden to the modeler.
+
+To further illustrate the point, consider the bias-variance tradeoff in machine learning:
+
+* Adding assumptions to a model will increase the bias, but decrease the variance.
+
+* Removing assumptions from a model will decrease the bias, but increase the variance.
+
+Rules-based models essentially occupy one extreme of the tradeoff where we add *many* assumptions, driving up the bias but lowering the variance. In situations where variance is extremely high (e.g. small samples), this can be a useful approach.
+
+<br>
+
+---
+
+<br>
+
+# Trend-Seasonality Models
+
+<br>
+
+## Trend-Seasoanlity Decompositions
+
+The **trend** (general direction) and **seasonality** (cyclic behavior) are features from a time-series that can be extracted. The corresponding model is given by:
+
+$$Y_t = T_t + S_t + R_t$$
+
+which says that $Y_t$ is equal to the trend $T_t$ plus a seasonality adjustment $S_t$ and some remainder term $R_t$ (usually some kind of random variable). Such a model is called a **time-series decomposition**, since it splits $Y_t$ into subcomponents. The typical process for estimating such models is:
+
+1) Estimate the trend $T_t$ via linear, log-linear, nearest neighbors, or local regression on $Y_t = f(t)$. We typically demand that $f$ to be "sufficiently" smooth to accurately represent long-run trends. We set $T_t = f(t)$.
+
+2) Estimate the seasonality component on $Y_t - T_t$. The most direct approach is to group each data point by seasonal period (e.g. days of the week, months of a year, etc.) and take the average of the groups. 
+   * A more sophisticated approach would be to regress on a spline: $Y_t - T_t = S(\hat{t})$ where $\hat{t}$ is the seasonal grouping that $t$ belongs to. The spline $S(\hat{t})$ estimates the actual waveform of the seasonality.
+   * An even more sophisticated approach would be to use a discrete Fourier transform to estimate the waveform as sum of sine and cosine waves. Note that this is analogous to using a spline; it's just that the basis elements are sinusoids instead of local polynomials ("spline" = piecewise polynomial).
+   
+3) The remainder term is just $R_t = Y_t - T_t$.
+
+Forecasting requires that the value of $T_t$ must be known at the time of forecast. Consequently, certain techniques like nearest neighbors must be adjusted to only use data that known at time $t-1$. For example, instead of $k$-nearest neighbors, we would use $k$-nearest *left* neighbors (which is equivalent to a rolling average model).
+
+As stated above, multiple different methods can be used to estimate the trend and seasonality. The exact combination of methodology gives rise to various different algorithms.
+
+## The STL Algorithm
+
+The **STL** algorithm uses a local regression algorithm called LOESS to estimate the trend and seasonality components; the name "STL" stands for *seaonsal decomposition of time-series with LOESS*. STL does the following:
+
+1) Estimate the trend component $T_t$ by using LOESS to smooth the time-series locally. The smoothing is done iteratively: first the raw values of $Y_t$ are smoothed over a small local neighborhood to get $T_{1,t}$. Then the output values $T_{1,t}$ are themselvs smoothed over a larger window to get the next iteration $T_{2,t}$, and so on. The process repeats until the output values are sufficiently smooth. The final iteration is declared as the trend $T_t$.
+
+2) On the de-trended time series $Y_t - T_t$, split the series into seasonal groups (e.g. all data points in the same month). LOESS smoothing is then used to estimate a smooth seasonal pattern $S_t$.
+
+3) The remainder term is then just $Y_t - T_t - S_t$
+
+<br>
+
+## The Prophet Algorithm
+
+Facebook's **prophet algorithm** is a time-series decomposition model with an additional term:
+
+$$
+Y_t = T_t + S_t + H_t + R_t
+$$
+
+where the additional term $H_t$ represents a set of indicator variables controlling for specific points in time. E.g. if $Y_t$ is a time-series for sales data, then $H_t$ would correspond to specific shopping days like Black Friday, Cyber Monday, or Christmas.
+
+In addition to the additional holiday controls, the prophet estimates the trend and seasonality components using the following methods:
+
+1) The trend $T_t$ is estimated using a spline, specifically a linear function.
+2) The seasonality component is estimated using a discrete Fourier transform.
+
+The final major evoluation is that the model estimates these components using a Bayesian regression.
+
+<br>
+
+---
+
+<br>
+
+# Regression Models
+
+A **regression model** is a model that predicts time-series $Y_t$ on using a set of other time-series $X_{1,t}, \ldots, X_{p,t}$. Formally, regression models state that
+
+$$
+Y_t = f(X_{1,t},\ldots,X_{i,t}) + \epsilon_t
+$$
+
+The function $f$ is the main object of interest as it represents the expected value of $Y_t$ at time $t$: $\mathbb{E}(Y_t|t) = f(X_{1,t},\ldots,X_{i,t})$. The function $f$ can be estimated via regression (e.g. linear regression, GLMs, GAMs, KNN, etc.). 
+
+Note that time-series data generally do not constitute an i.i.d. sample; data points close in time will almost certainly be correlated. If the correlation is weak, classical inference techniques can still be applied. 
+
+* If the correlation is significant, the approach is to fit a regression model $Y_t = \hat{f}(X_{1,t},\ldots,X_{i,t})$ so that the residuals are *stationary* (i.e. "almost" i.i.d. except that the residuals are correlated in time). Then an ARIMA model can be fit on the residuals to account the autocorrelation. Such models are called *dynamic regression models*.
+  
+* Intuitively, regression models can be thought of as a generalization of trend-seasonality models, where the trend and seasonality are just functions of some underlying predictors.
+
+An important consideration for forecasting: if we model $Y_t = \hat{f}(X_{1,t},\ldots, X_{p,t})$ then forecasting a future value $Y_t$ requires knowing the future values $X_{i,t}$. This might be ok if the $X_{i,t}$ values are controllable (e.g. the price of a product). If the $X_{i,t}$ values cannot be known ahead of time, then they will need to be forecasted themselves. 
+
+<br>
+
+---
+
+<br>
+
+# Nearest Neighbors Models
+
+<br>
+
+## The Naive Model
+
+Absent any information and assumptions, the current value $Y_T$ is the best prediction for all future values $Y_{T+k}$. In this case, the current value of the time-series $Y_T$ is the only feature being extracted and the corresponding model is $Y_{t+1} = Y_t$ for all time $t$. This is called the **naive model**.
+
+<br>
+
+## The Rolling Average Model
+
+We can extend the naive model and consider multiple past values $Y_{T-k},\ldots, Y_T$ of the time-series. These can be averaged to get a feature known as the *rolling average* 
+$$
+RA_k(t) = \frac{1}{k}\sum_{i = t-k}^{t-1} Y_k
+$$
+which can be used as a model: $Y_t = RA_k(t) + \epsilon_t$. This is analogous to looking at the $k$-nearest neighbors to $Y_t$ *in time* and predicting the value of $Y_t$ based on it's neighbors. Note that the naive model is equivalent to a rolling average model where $k=1$.
+
+The main benefit of any nearest neighbors methods is that they are it's non-parametric, so we don't need to make strong assumptions about nature of the data generating process. We can still navigate the bias-variance tradeoff by increasing or decreasing the size of the neighborhood $k$:
+
+* Larger $k$ lead to smoother models (less variance), at the cost of introducing more *historical bias*; we are essentially biasing towards the stable long-run trend but washing out any short-run variations.
+
+* Smaller $k$ lead to more jagged models (more variance), but lower the historical bias; we can capture short-run variations but the estimates will become much less stable.
+
+The main limitation is that we can only predict one time-step ahead. Unobserved values at $Y_{T+k}$ would have neighbors that have not been observed yet.
+
+<br>
+
+## The Exponential Smoothing
+  
+We can extend the nearest neighbors model by layering in a *recency bias*; this corresponds to making an assumption that more recent data is also more relevant. Specifically, we can take a *weighted* rolling average: 
+$$
+\hat{Y}_t = \frac{1}{k}\sum_{i = t-k}^{t-1} w_kY_k
+$$ 
+
+where $w_{i-1} < w_i$. The most common choice for the weights $w_i$ is to use  *exponentially decaying* weights :
+
+$$
+\hat{Y}_t = \frac{1}{k}\sum_{i = t-k}^{t-1} \alpha(1-\alpha)^{t-1-i}Y_k
+$$ 
+
+Such a model is called an **exponential smoothing model**.
+
+<br>
+
+---
+
+<br>
+
+# ARIMA Models
+
+<br>
+
+## The Long-Run Average Model
+
+The **long-run average model** states models $Y_t$ using a simple equation:
+
+$$
+Y_t = \mu + \epsilon_t
+$$
+
+where $\mu$ is some long-run average and $\epsilon_t$ are random shocks with mean 0. The value of $\mu$ can be estimated by taking the average of all previously observed data:
+
+$$
+\overline{\mu}(Y_t) = \frac{1}{T}\sum_{t = 1}^T Y_t
+$$
+
+Since the model $\epsilon_t$ have mean zero, this model stipulates that $Y_t$ should be scattered around a flat line $\mu$. Consequently, this means that the model assumes $Y_t$ does not have any trend component.
+
+<br>
+
+## The Moving Average Model
+
+We can take the long-run average model and layer in an additional feature called **autocorrelation** which measures how correlated $Y_t$ is with lagged values $Y_{t-i}$. Specifically, let $\rho_i = cor(Y_t, Y_{t-i})$. If it turns out that $\rho_i$ is zero for all but finitely many $i$, then $Y_t$ is correlated with only finitely many past values. Let $Y_{t-q}$ be the last lagged value that $Y_t$ is correlated with. We can model this situation with a **moving average model**, denoted $MA(q)$, given by:
+
+$$
+Y_t = \mu + \epsilon_t + \phi_1\epsilon_{t-1} + \ldots + \phi_k\epsilon_{t-q}
+$$
+
+This model says that $Y_t$ is equal to a long-run average model but experiences residual effects from past random shocks; this would explain the autocorrelation with past values up to $Y_{t-q}$. However, the residual impact from these shocks must eventually die out by after $q+1$ many steps, since $Y_{t-q}$ is the last lagged-value which is correlated with $Y_t$.
+
+The most intuitive way to think about the random shocks $\epsilon_t$ is to consider them as *technological innovations* (see example below). For this reason, the $\epsilon_t$ are usually referred to as the **innovations**.
+  * For example: let $Y_t$ denote the number of sales of a laptop brand at time $t$. Let $\mu$ be the long-run market equilibrium point, meaning $Y_t = \mu$ for all time $t$, ceteris paribas. At the time $t=T$, the company achieves an engineering breakthrough and quadruples the battery life of its laptops without any downsides; this causes a random shock $\epsilon_T$ at time $T$ and will increase future sales: $Y_{T+k} = \mu + \phi_k \epsilon_T$. However their competitors' technology will catch-up over time and all laptops in the market will have the same quadrupled batter life. The effect of the random shock $\epsilon_T$ must therefore die out by time $T+k$ and the market must return to the long-run equilibrium point $Y_{T+k+1} = \mu$.
+
+<br>
+
+## Autoregressive Models
+ 
+In the case where $Y_t$ is autocorrelated with *all* of its lagged values $Y_{t-i}$ for all $i$, this indicates that $Y_t$ is affected by all of its past values. Therefore, none of the past shocks will completely die out, so a moving average $MA(q)$ is not appropriate. Nonetheless, this is a feature of the time-series and we can attempt to model it. 
+
+One approach is to use a simple **autoregressive model**, denoted $AR(1)$, and given by: 
+
+$$Y_t = \mu + \epsilon_t + \phi Y_{t-1}$$
+
+Here $Y_t$ is allowed to directly depend on $Y_{t-1}$. Since $Y_{t-1}$ will itself by dependent on $Y_{t-2}$ and so on, we can proceed by induction and get: 
+
+$$Y_t = \mu + \epsilon_t + \phi^i Y_{t-i} + (\text{some } \epsilon \text{ terms}) \qquad \forall \,i$$
+
+Therefore, this model states that $Y_t$ is dependent on every one of its previous values $Y_{t-i}$, which is exactly the property that we want. We can generalize this to model to capture more sophisticated autoregressive patterns by simply adding more lagged terms:
+
+$$
+Y_t = \mu + \epsilon_t + \phi_1 Y_{t-1} + \phi_2 Y_{t-2} + \ldots + \phi_p Y_{t-p}
+$$
+
+This is called an **autoregressive model of order $p$** and denoted by $AR(p)$. 
+
+The behavior of an $AR(p)$ bifurcates based on the exact values of the coefficients $\phi_i$. When the $\phi_i$ are "small enough", the time series $Y_t$ will naturally converge back to the baseline value $\mu$ over a long period of time. If the $\phi_i$ are "too large", then the time series will explode to positive or negative infinity. The exact behavior of the time-series can be deduced using the **characteristic polynomial**:
+
+$$
+\Phi(z) = 1 - \phi_1z - \phi_2z^2 - \ldots - \phi_p z^p
+$$
+
+If $\Phi(z)$ has a complex root $w$ such that $|w| < 1$, then the time series will explode to $\pm \infty$; this is equivalent to having a positive or negative trend and that this trend can be removed by repeated differencing. If all the roots of $\Phi(z)$ have $|w| > 1$, then the time-series becomes stationary around the long-run average $\mu$. The interesting case occurs when $\Phi(z)$ has a complex root with $|w|=1$, which we call a **unit root**. In this case, the time-series might not have a trend but will also not be stationary (e.g. imaging a random walk).
+
+<br>
+
+## The ARIMA Model
+
+A **stationary** time-series is a time-series which behaves almost like i.i.d. data but is allowed to be autocorrelated. The benefits of a stationary time-series is that we can perform statistical inference on them to estimate things like **prediction intervals** (e.g. how confident are we in our forecast?). However, stationary data must not have a trend or seasonality, so the typical approach is:
+
+1) Model the trend and seasonality: $Y_t \approx \hat{f}(t) + \hat{s}(t) + \hat{\epsilon}_t$.
+
+2) Extract the residuals $\hat{\epsilon}_t$ to form a new time-series. Since the trend and seasonality were extracted, the $\hat{\epsilon}_t$ should be stationary.
+
+3) Model the residual time-series $\hat{\epsilon}$ using a moving average $MA(q)$, autoregressive $AR(p)$, or a combined $ARMA(p,q)$ model. We can then place confidence intervals around the estimated coefficients.
+
+Notice here that we would need to stitch together multiple different models, which can be quite tedious. However, the trend and seasonality can be removed by taking a first, second, or $d$-difference, then we can use a single algorithm to model the time-series. For a time series $Y_t$, the $d$-th difference is defined recursively as:
+
+$$
+\begin{align*}
+\Delta_1(t) &= Y_t - Y_{t-1}\\
+\Delta_2(t) &= \Delta_1(t) - \Delta_1(t-1)\\
+&\vdots \\
+\Delta_d(t) &= \Delta_{d-1}(t) - \Delta_{d-1}(t-1)\\
+\end{align*}
+$$
+
+If the resulting time series $\Delta_d(t)$ is stationary, then the original series $Y_t$ can be modeled using the following algorithm:
+
+1) Fit an $ARMA(p,q)$ model onto the stationary $\Delta_d(t)$.
+2) Reconstruct the original $Y_t$ by summing together $\Delta_{i-1}(t) = \Delta_{i-1}(t-1) + \Delta_i(t)$ for all levels $i$, until we return to $Y_t = Y_{t-1} + \Delta_1(t)$. Since the difference $\Delta_d$ can be thought as the $d$-th derivative of $Y_t$, the reverse process of recovering $Y_t$ is called **integration**.
+
+This model is called an **autoregressive integrated moving average (ARIMA)** of order $p$, $d$, $q$. The main benefit of this model is that confidence intervals for predictions can be estimated, even though the time-series $Y_t$ was not stationary.
+
+<br>
+
+---
+
+<br>
+
+# Vector Autoregression Models (VAR)
+
+Most of the models discussed above only concern themselves with a single time-series $Y_t$ to be forecasted. Suppose however that multiple time-series of interest $Y_{1,t},\ldots, Y_{M,t}$ need to be forecasted. If all the time-series are independent, then we can simply apply single-forecast models to each time-series separately. However, if the time-series are interdependent, then it makes more sense to consider a model which connects the various time-series into a system and forecast the entire system simultaneously.
+
+A **vector autoregression model (VAR)** models the system using a set of linear equations:
+
+$$
+\begin{align*}
+Y_{1,t} &= c_1 + \phi_{11,1}Y_{1,t-1} + \phi_{12,1}Y_{2,t-1} + \ldots + \phi_{1M,1}Y_{M, t-1} + \epsilon_{1,t}\\
+Y_{2,t} &= c_2 + \phi_{21,1}Y_{1,t-1} + \phi_{22,1}Y_{2,t-1} + \ldots + \phi_{2M,1}Y_{M, t-1} + \epsilon_{2,t}\\
+&\vdots\\
+Y_{M,t} &= c_M + \phi_{M1,1}Y_{1,t-1} + \phi_{M2,1}Y_{2,t-1} + \ldots + \phi_{MM,1}Y_{M, t-1} + \epsilon_{M,t}\\
+\end{align*}
+$$
+
+The "vector" in the name refers to this linear system and the "autoregression" refers to the lagged terms in each equation. The coefficients are estimated via *general multivariate linear regression*, i.e. re-write the system as a matrix equation:
+
+$$
+\bf{Y}_t = \bf{\Phi} \bf{Y}_{t-1} + \bf{\epsilon}_t
+$$
+
+And then find the matrix $\bf{\Phi}$ which minimizes the square residuals. This is equivalent to running a linear regression row-by-row.
+
+<br>
+
+---
+
+<br>
+
+
+<br>
+
+---
+
+<br>
+
+

@@ -1,0 +1,344 @@
+# 02 Trend And Seasonality
+
+
+<br>
+
+---
+
+<br>
+
+# Introduction
+
+```{r}
+# setup options and datasets
+options(scipen = 999)
+
+library(fpp3) # library for Forecasting: Principles and Practices 3rd edition
+
+# The PBS dataset is loaded by fpp3
+# We split the data into a "training" set
+# representing historical data we have observed
+# and a "test" set representing unobserved future values
+A10_observed <- PBS %>% 
+  filter(
+    ATC2 == "A10"
+  ) %>% 
+  summarise(
+    total_cost = sum(Cost)
+  ) %>% 
+  filter(
+    Month <= yearmonth('2005-12-01')
+  )
+
+A10_future <- PBS %>% 
+  filter(
+    ATC2 == "A10"
+  ) %>% 
+  summarise(
+    total_cost = sum(Cost)
+  ) %>% 
+  filter(
+    Month > yearmonth('2005-12-01')
+  )
+
+A10_observed 
+
+A10_observed %>% 
+  autoplot(total_cost)
+```
+
+<br>
+
+---
+
+<br>
+
+
+# Trends
+
+
+
+
+# Non-parametric Trends Via Moving Average
+
+In the previous section, we modeled trend by using a line of best fit on the log of the response variable. This was motivated by the observation that the time-series "seemed" to be growing exponentially. In situations where the nature of the growth is not obvious, assuming a functional form for the trend might not be viable. In these cases, the trend can be estimated non-parametrically by using a *moving average window*. For a pair of fixed non-negative integers $(a, b)$, the **window** at time each time $t$ is the subsequence of points:
+
+$$
+W_{a,b}(t) = (Y_{t-a},..., Y_t,\ldots, T_{t+b})
+$$
+The **moving average** of the window is the average value of the window:
+
+$$
+MA_{a,b}(t) = mean(W_{a,b}(t)) = \frac{\sum_{i = t-a}^{t+b} Y_i}{b+a+1}
+$$
+
+Intuitively, the window $W_{a,b}(t)$ is just are the nearest neighbors to $Y_t$ in the time domain; the moving average $MA_{a,b}(t)$ is analogous to using a $k$-nearest neighbors model to approximate the trend.
+
+```{r}
+# use the slider::slide_dbl() function
+# to perform a moving average.
+# We will do a moving average of t-2, t+2 (length 5),
+# and a moving average of t-5, t+5 (length 11)
+
+A10_observed %>% 
+  mutate(
+    MA5 = slider::slide_dbl(total_cost, mean, .before = 2, .after = 2, .complete = TRUE),
+    MA11 = slider::slide_dbl(total_cost, mean, .before = 5, .after = 5, .complete = TRUE)
+  ) %>% 
+  pivot_longer(
+    cols = c(total_cost, MA5, MA11),
+    names_to = "label",
+    values_to = "value"
+  ) %>% 
+  autoplot(value)
+```
+
+A slight problem arises though: the value of $MA_{a,b}(t)$ at time $t$ is dependent on future values at time $t+1, \ldots, t+b$. If we are just interested in understanding the behavior of past data, this is perfectly acceptable. Forecasting, however, becomes a problem since we don't know the future values beforehand. We can modify the idea into a **rolling average** which only uses on previous time steps $t-a,\ldots, t-1$:
+
+```{r}
+A10_observed %>% 
+  mutate(
+    total_cost_lag1 = lag(total_cost, 1),
+    RA5 = slider::slide_dbl(total_cost_lag1, mean, .before = 5, .after = 0, .complete = TRUE),
+    RA11 = slider::slide_dbl(total_cost_lag1, mean, .before = 11, .after = 0, .complete = TRUE)
+  ) %>% 
+  pivot_longer(
+    cols = c(total_cost, RA5, RA11),
+    names_to = "label",
+    values_to = "value"
+  ) %>% 
+  autoplot(value)
+```
+
+We take the average of the previously observed values $Y_{t-a}, \ldots, Y_{t-1}$ as the rolling average $RA_{a}(t)$, which represents the estimated value of the trend at time $t$. This is now a proper forecast model, since we only use previously observed data to predict the value at $t$. After time $t$ has passed and we observe $Y_t$, we can append this new value to our dataset and compute the rolling average $RA_{a}(t+1)$ to forecast the trend at time $t+1$.
+
+We can take this one step further and do a weighted rolling average. The motivation is this: if we are trying to forecast $Y_t$, then data points closest to time $t$ should be given more weight. For example:
+
+$$
+\hat{Y}_t = \alpha Y_{t-1} + \alpha(1-\alpha)Y_{t-2} + \alpha(1-\alpha)^2 Y_{t-3} + \ldots
+$$
+
+where $0\leq \alpha \leq 1$. This specific method is called **exponential smoothing** since the weights decay exponentially the further back in time we go.
+
+
+# Linear And Exponential Trends
+
+We observe that this time-series data for total A10 cost is going up over time. The rate of increase seems to indicate an exponential trend. To estimate an "exponential curve of best fit", we can take the logarithm of the data and fit a simple linear regression:
+
+```{r}
+log_cost_data <- A10_observed %>% 
+  mutate(
+    log_cost = log(total_cost)
+  )
+
+log_cost_data %>% 
+  autoplot(log_cost) + 
+  geom_smooth(method = "lm")
+```
+
+```{r}
+model <- lm(
+  log_cost ~ Month,
+  data = log_cost_data
+)
+
+summary(model)
+```
+
+```{r}
+get_predictions <- function(model, df){
+  results_data <- df %>% 
+    mutate(
+      log_cost = log(total_cost)
+    )
+    
+    results_data$prediction <- exp(predict(model, results_data))
+    
+    results_data <- results_data %>% 
+      mutate(
+        residual = total_cost - prediction
+      )
+    
+    return(results_data)
+}
+
+get_predictions(model, A10_future) %>% 
+  as_tibble() %>% 
+  summarise(
+    rmse = sqrt( mean( (total_cost - prediction)^2 ) )
+  )
+
+get_predictions(model, A10_future) %>% 
+  select(
+    Month,
+    total_cost,
+    prediction
+  ) %>% 
+  pivot_longer(
+    cols = c(total_cost, prediction),
+    names_to = "metric",
+    values_to = "value"
+  ) %>% 
+  as_tsibble(
+    key = metric,
+    index = Month
+  ) %>% 
+  autoplot(value)
+
+get_predictions(model, A10_future) %>% 
+  autoplot(residual)
+
+
+```
+
+# Non-parametric Trends Via Moving Average
+
+In the previous section, we modeled trend by using a line of best fit on the log of the response variable. This was motivated by the observation that the time-series "seemed" to be growing exponentially. In situations where the nature of the growth is not obvious, assuming a functional form for the trend might not be viable. In these cases, the trend can be estimated non-parametrically by using a *moving average window*. For a pair of fixed non-negative integers $(a, b)$, the **window** at time each time $t$ is the subsequence of points:
+
+$$
+W_{a,b}(t) = (Y_{t-a},..., Y_t,\ldots, T_{t+b})
+$$
+The **moving average** of the window is the average value of the window:
+
+$$
+MA_{a,b}(t) = mean(W_{a,b}(t)) = \frac{\sum_{i = t-a}^{t+b} Y_i}{b+a+1}
+$$
+
+Intuitively, the window $W_{a,b}(t)$ is just are the nearest neighbors to $Y_t$ in the time domain; the moving average $MA_{a,b}(t)$ is analogous to using a $k$-nearest neighbors model to approximate the trend.
+
+```{r}
+# use the slider::slide_dbl() function
+# to perform a moving average.
+# We will do a moving average of t-2, t+2 (length 5),
+# and a moving average of t-5, t+5 (length 11)
+
+A10_observed %>% 
+  mutate(
+    MA5 = slider::slide_dbl(total_cost, mean, .before = 2, .after = 2, .complete = TRUE),
+    MA11 = slider::slide_dbl(total_cost, mean, .before = 5, .after = 5, .complete = TRUE)
+  ) %>% 
+  pivot_longer(
+    cols = c(total_cost, MA5, MA11),
+    names_to = "label",
+    values_to = "value"
+  ) %>% 
+  autoplot(value)
+```
+
+A slight problem arises though: the value of $MA_{a,b}(t)$ at time $t$ is dependent on future values at time $t+1, \ldots, t+b$. If we are just interested in understanding the behavior of past data, this is perfectly acceptable. Forecasting, however, becomes a problem since we don't know the future values beforehand. We can modify the idea into a **rolling average** which only uses on previous time steps $t-a,\ldots, t-1$:
+
+```{r}
+A10_observed %>% 
+  mutate(
+    total_cost_lag1 = lag(total_cost, 1),
+    RA5 = slider::slide_dbl(total_cost_lag1, mean, .before = 5, .after = 0, .complete = TRUE),
+    RA11 = slider::slide_dbl(total_cost_lag1, mean, .before = 11, .after = 0, .complete = TRUE)
+  ) %>% 
+  pivot_longer(
+    cols = c(total_cost, RA5, RA11),
+    names_to = "label",
+    values_to = "value"
+  ) %>% 
+  autoplot(value)
+```
+
+We take the average of the previously observed values $Y_{t-a}, \ldots, Y_{t-1}$ as the rolling average $RA_{a}(t)$, which represents the estimated value of the trend at time $t$. This is now a proper forecast model, since we only use previously observed data to predict the value at $t$. After time $t$ has passed and we observe $Y_t$, we can append this new value to our dataset and compute the rolling average $RA_{a}(t+1)$ to forecast the trend at time $t+1$.
+
+We can take this one step further and do a weighted rolling average. The motivation is this: if we are trying to forecast $Y_t$, then data points closest to time $t$ should be given more weight. For example:
+
+$$
+\hat{Y}_t = \alpha Y_{t-1} + \alpha(1-\alpha)Y_{t-2} + \alpha(1-\alpha)^2 Y_{t-3} + \ldots
+$$
+
+where $0\leq \alpha \leq 1$. This specific method is called **exponential smoothing** since the weights decay exponentially the further back in time we go.
+
+<br>
+
+---
+
+<br>
+
+# Seasonality
+
+Using the trend-line as our prediction, we observe a cyclical pattern in the residuals: the values start off low in February and rise until they reach a peak next January. Such a pattern is called **seasonality** as the value of the response variable is correlated with the "season" of the year. We can get a better view of the seasonal pattern by treating each as a standalone time series and overlaying the time-series plot for each year:
+
+```{r}
+# use the gg_season function from feasts
+A10_observed %>% 
+  gg_season(total_cost, labels = "both", period = "year")
+```
+
+We in fact see that all the time-series peak in January, drop off rapidly into February, and slowly climb back up again throughout the year. If we want to model this seasonal pattern, the most direct approach is to add a dummy variable for each month of the year.
+
+```{r}
+log_cost_data <- log_cost_data %>% 
+  mutate(
+    month_of_year = as.factor(month(Month))
+  )
+
+log_cost_data
+```
+
+```{r}
+seasonal_model <- lm(
+  log_cost ~ Month + month_of_year,
+  data = log_cost_data
+)
+
+summary(seasonal_model)
+```
+
+Here, the `Intercept` term corresponds to the month of January; the coefficients for the other months are the differences between those months and January.
+
+```{r}
+results <- get_predictions(seasonal_model, A10_future %>% mutate(month_of_year = as.factor(month(Month))))
+
+results %>% 
+  as_tibble() %>% 
+  summarise(
+    rmse = sqrt( mean( (total_cost - prediction)^2 ) )
+  )
+
+results %>% 
+  select(
+    Month,
+    total_cost,
+    prediction
+  ) %>% 
+  pivot_longer(
+    cols = c(total_cost, prediction),
+    names_to = "metric",
+    values_to = "value"
+  ) %>% 
+  as_tsibble(
+    key = metric,
+    index = Month
+  ) %>% 
+  autoplot(value)
+
+results %>% 
+  autoplot(residual)
+  
+```
+
+<br>
+
+---
+
+<br>
+
+# Time-Series Decompositions
+
+The idea outlined in the previous section is to model a time-series by decomposing it into a trend and seasonal component:
+
+$$
+Y_t = T_t + S_t + R_t
+$$
+
+where $T_t$ is the trend, $S_t$ is the seasonality, and $R_t$ is the remainder. Note that $T_t$ does not need to be linear; trends can be any shape in general.
+
+<br>
+
+---
+
+<br>

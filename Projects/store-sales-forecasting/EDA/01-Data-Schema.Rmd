@@ -1,0 +1,171 @@
+
+# Store Sales: Data Schema
+
+```{r, message = FALSE, warning = FALSE}
+library(dplyr)
+library(stringr)
+library(lubridate)
+library(readr)
+library(tidyr)
+
+DATA_DIR = paste0(Sys.getenv("DATA_DIR"), "/store-sales-time-series")
+
+TRAIN_PATH = paste0(DATA_DIR, "/train.csv")
+TEST_PATH = paste0(DATA_DIR, "/test.csv")
+
+# load training dataset
+df = read_csv(TRAIN_PATH)
+
+# load testing dataset
+df_test = read_csv(TEST_PATH)
+```
+
+# Size and Dimensions
+
+```{r}
+df
+df_test
+```
+
+* Training data set contains 3M rows; testing data set contains 28.5K
+* The principle dimensions are 
+  * `date` giving the point in time
+  * `store_nbr` an identifier for the store
+  * `family` giving the category of product
+  * `onpromotion` counts the number of products being promoted in the specific family x store x date.
+* the response variable is `sales`.
+
+<br>
+
+---
+
+<br>
+
+# Date
+
+```{r}
+df %>% 
+  group_by(date) %>% 
+  summarise(
+    sales = sum(sales)
+  )
+
+# check for missing dates
+test_dates <- seq(min(df$date), max(df$date), by = "days")
+length(test_dates)
+
+tibble(
+  date = test_dates
+) %>% 
+  left_join(
+    df %>% 
+      group_by(date) %>% 
+      summarise(
+        sales = sum(sales)
+      ),
+    by = "date"
+  ) %>% 
+  filter(
+    is.na(sales)
+  )
+
+df_test %>% 
+  group_by(date) %>% 
+  summarise(
+    count = n()
+  )
+```
+
+* The starting date is 2013-01-01 and ending date is 2015-09-29. There should be 1,688 datest between the start and end, but only 1684 are present.
+* The 4 missing dates all correspond to Christmas 2013-12-25, 2014-12-25, 2015-12-25.
+* The test data only spans the backhalf of August: 2017-08-16 to 2017-08-31, so the missing dates might be ok...
+
+<br>
+
+---
+
+<br>
+
+# Store Number
+
+```{r}
+df %>% 
+  group_by(
+    store_nbr
+  ) %>% 
+  summarise(
+    count = n()
+  ) %>% 
+  arrange(desc(count))
+
+df_test %>% 
+  group_by(
+    store_nbr
+  ) %>% 
+  summarise(
+    count = n()
+  ) %>% 
+  arrange(desc(count))
+```
+
+* There are 54 different stores, all with the same number of rows.
+* All 54 stores are present in the test data, and the test data does not contain any unseen stores.
+
+<br>
+
+---
+
+<br>
+
+# Family
+
+```{r}
+df %>% 
+  group_by(family) %>% 
+  summarise(
+    sales = sum(sales)
+  )
+
+df_test %>% 
+  group_by(family) %>% 
+  summarise(
+    count = n()
+  )
+```
+
+* There are 33 families in the training data; the test data has the exact same families.
+* 33 families x 1,684 days = 55,572 which is the number of rows per store. This means that each store has the full 55,572 possible combinations of family x date.
+
+```{r}
+33 * 1684
+```
+
+<br>
+
+---
+
+<br>
+
+# On Promotion
+
+```{r}
+df %>% 
+  mutate(
+    onpromotion_value = case_when(
+      onpromotion == 0 ~ 0,
+      onpromotion > 0 ~ 1
+    )
+  ) %>% 
+  group_by(onpromotion_value) %>% 
+  summarise(
+    count = n()
+  )
+```
+
+* All values for `onpromotion` are non-negative and not null.
+
+<br>
+
+---
+
+<br>

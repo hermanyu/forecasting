@@ -1,0 +1,167 @@
+# 03 Autocorrelation
+
+One important property with time-series data is *autocorrelation* ("self-correlated"). **Autocorrelation** is the concept that data points which appear close together in time will also tend to be close together in value. For example, if we know the price of a stock at 10:00 am is 100 dollars, then it is very likely that the price at 10:01 am will be very close to 100 dollars. The degree to which a time-series is autocorrelated is a feature we can extract from a time-series to help us make better predictions.
+
+```{r}
+library(fpp3)
+```
+
+```{r}
+# the aus_production dataset
+# contains time-series on the production of 7 goods in Australia
+aus_production
+```
+
+```{r}
+# we will focus on the beer production
+beer_production <- aus_production %>% 
+  select(
+    Quarter,
+    Beer
+  )
+
+beer_production %>% 
+  autoplot(Beer)
+```
+
+To illustrate the autocorrelation present in this time-series, we can *lag* the `Beer` variable by a time step of 1 and plot on the same graph:
+
+```{r}
+beer_production <- beer_production %>% 
+  mutate(
+    Beer_lag1 = lag(Beer, n=1)
+  ) 
+
+beer_production %>% 
+  pivot_longer(
+    cols = c(Beer, Beer_lag1),
+    names_to = "label",
+    values_to = "value"
+  ) %>% 
+  autoplot(value)
+```
+
+Notice that the variable `Beer` and it's lag `Beer_lag` move together, which reflects the fact that the value at time $T$ is typically close to the value at the previous time $T-1$. This leads to a very interesting idea: if we knew the value at time $T-1$, then we should be able to make a prediction about the value at time $T$.
+
+```{r}
+beer_observed <- beer_production %>% 
+  filter(
+    Quarter < yearquarter("2000-01-01")
+  )
+
+beer_future <- beer_production %>% 
+  filter(
+    Quarter >= yearquarter("2000-01-01")
+  )
+
+model <- lm(
+  Beer ~ Beer_lag1 - 1,
+  data = beer_observed
+)
+
+summary(model)
+```
+
+Now, let's use the final value of `beer_observed` to predict the very fist value of `beer_future`.
+
+```{r}
+# the final observed value of Beer is 521 at 1999 Q4;
+# this will be used as the input to predict the next value of Beer at 2000 Q1.
+# Note that the value of Beer at 1999 Q4 is stored as Beer_lag1 for 2000 Q4.
+beer_observed %>% 
+  filter(
+    Quarter == yearquarter("1999-12-31")
+  )
+
+beer_future %>% 
+  select(
+    Quarter,
+    Beer_lag1
+  ) %>% 
+  filter(
+    Quarter == yearquarter("2000-01-01")
+  )
+```
+
+```{r}
+result <- beer_future %>% 
+  filter(
+    Quarter == yearquarter("2000-01-01")
+  )
+
+result$prediction <- predict(model, result)
+
+result <- result %>% 
+  mutate(
+    residual = Beer - prediction
+  )
+
+result %>% 
+  select(
+    Quarter,
+    Beer_lag1,
+    prediction
+  )
+```
+
+So using the value of 521 for Beer at 1999 Q4, our model predicts a value of 515.4 for Beer at 2000 Q1. Now, let's suppose that 2000 Q1 arrives and we observe the actual value for Beer at that point in time:
+
+```{r}
+result
+```
+
+Our prediction was over by 94.4. But we can repeat the process and use the newly observed value for Beer at 2000 Q1 to predict the value at 2000 Q2.
+
+```{r}
+result <- beer_future %>% 
+  filter(
+    Quarter == yearquarter("2000-04-01")
+  )
+
+result$prediction <- predict(model, result)
+
+result <- result %>% 
+  mutate(
+    residual = Beer - prediction
+  )
+
+result %>% 
+  select(
+    Quarter,
+    Beer_lag1,
+    prediction
+  )
+```
+
+Our prediction for Beer at 2000 Q2 is 416.5. Again, let's suppose that 2000 Q2 arrives and we observe the actual value of Beer:
+
+```{r}
+result
+```
+
+Our prediction was pretty close, only over by 14.5 this time. We can keep repeating this process of making a prediction 1 time-step ahead, observing the actual value, then using the actual value to generate the next prediction.
+
+```{r}
+result <- beer_future
+
+result$prediction <- predict(model, result)
+
+result <- result %>% 
+  mutate(
+    residual = Beer - prediction
+  )
+
+result %>% 
+  select(
+    Quarter,
+    Beer,
+    prediction
+  ) %>% 
+  pivot_longer(
+    cols = c(Beer, prediction),
+    names_to = "label",
+    values_to = "value"
+  ) %>% 
+  autoplot(value)
+```
+

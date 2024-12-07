@@ -1,0 +1,239 @@
+
+# Model v0.1 - Trends Only
+
+```{r}
+library(dplyr)
+library(tsibble)
+library(feasts)
+library(stringr)
+library(lubridate)
+library(readr)
+library(tidyr)
+library(ggplot2)
+
+DATA_DIR = paste0(Sys.getenv("DATA_DIR"), "/store-sales-time-series")
+
+TRAIN_PATH = paste0(DATA_DIR, "/train.csv")
+TEST_PATH = paste0(DATA_DIR, "/test.csv")
+
+# give ourselves 3 months worth of holdout data
+training_end_date = "2017-04-30"
+
+# load training dataset
+df = read_csv(TRAIN_PATH) %>% 
+  tsibble(
+    key = c(store_nbr, family),
+    index = date
+  )
+
+df_test = read_csv(TEST_PATH) %>% 
+  tsibble(
+    key = c(store_nbr, family),
+    index = date
+  )
+
+df_holdout <- df %>% 
+  filter(
+    date > training_end_date
+  )
+
+df_train <- df %>% 
+  filter(
+    date <= training_end_date
+  )
+```
+
+```{r}
+cutoff_dates <- c(
+  "AUTOMOTIVE" = "2013-01-01",
+  "BABY CARE" = "2016-01-01",
+  "BEAUTY" = "2013-01-01",
+  "BEVERAGES" = "2015-06-01",
+  "BOOKS" = "2016-10-12",
+  "BREAD/BAKERY" = "2013-01-01",
+  "CELEBRATION" = "2016-01-01",
+  "CLEANING" = "2013-01-01",
+  "DAIRY" = "2014-01-01",
+  "DELI" = "2013-01-01",
+  "EGGS" = "2013-01-01",
+  "FROZEN FOODS" = "2013-01-01",
+  "GROCERY I" = "2013-01-01",
+  "GROCERY II" = "2013-01-01",
+  "HARDWARE" = "2013-01-01",
+  "HOME AND KITCHEN I" = "2015-01-01",
+  "HOME AND KITCHEN II" = "2015-06-01",
+  "HOME APPLIANCES" = "2013-01-01",
+  "HOME CARE" = "2015-06-01",
+  "LADIESWEAR" = "2015-06-01",
+  "LAWN AND GARDEN" = "2016-12-01",
+  "LINGERIE" = "2013-01-01",
+  "LIQUOR,WINE,BEER" = "2013-01-01",
+  "MAGAZINES" = "2016-01-01",
+  "MEATS" = "2013-01-01",
+  "PERSONAL CARE" = "2013-01-01",
+  "PET SUPPLIES" = "2015-06-01",
+  "PLAYERS AND ELECTRONICS" = "2015-06-01",
+  "POULTRY" = "2014-01-01",
+  "PREPARED FOODS" = "2013-01-01",
+  "PRODUCE" = "2015-06-01",
+  "SCHOOL AND OFFICE SUPPLIES" = "2015-06-01",
+  "SEAFOOD" = "2014-01-01"
+)
+
+family_cutoff_dates <- tibble(
+  family = names(cutoff_dates),
+  family_cutoff_date = cutoff_dates
+)
+```
+
+
+```{r}
+df_train_aggregated <- df_train %>% 
+  group_by(family) %>% 
+  summarise(sales = sum(sales)) %>% 
+  left_join(
+    family_cutoff_dates,
+    by = "family"
+  ) %>% 
+  filter(
+    date > family_cutoff_date
+  )
+```
+
+There are 33 x 54 combinations of `family` x `store_nbr`. If we estimate a separate trend line for each, this equals 33 x 54 x 2 = 3,564 parameters. Instead of a model with 3,000+ parameters, we will estimate a trendline for each family to predict total sales by family by day. We then estimate the distribution of sales by store for each family.
+
+```{r}
+model <- lm(
+  sales ~ family + family : date - 1,
+  data = df_train_aggregated
+)
+
+summary(model)
+```
+
+```{r}
+sales_distribution <- df %>% 
+  filter(
+    date >= "2017-04-01",
+    date <= "2017-04-30"
+  ) %>% 
+  as_tibble() %>% 
+  group_by(family, store_nbr) %>% 
+  summarise(
+    sales = sum(sales)
+    , .groups = "drop"
+  ) %>% 
+  group_by(family) %>% 
+  mutate(
+    percent_sales = sales/sum(sales)
+  ) %>% 
+  select(
+    family,
+    store_nbr,
+    percent_sales
+  ) %>% 
+  ungroup()
+
+sales_distribution
+```
+
+
+
+```{r}
+
+get_predictions <- function(model, df, distribution){
+  results_data <- df
+
+  results_data$raw_prediction <- predict(model, df)
+  
+  results_data <- results_data %>% 
+    left_join(
+      distribution,
+      by = c("family", "store_nbr")
+    ) %>% 
+    mutate(
+      prediction = raw_prediction * percent_sales,
+      prediction = ifelse(prediction < 0, 0, prediction)
+    )
+  
+  return(results_data)
+}
+
+
+get_predictions(model, df_holdout, sales_distribution)
+
+get_predictions(model, df_holdout, sales_distribution) %>% 
+  as_tibble() %>% 
+  summarise(
+    rmse = sqrt( mean( (log(1 + sales) - log(1 + prediction) )^2 ) )
+  )
+```
+
+```{r}
+get_predictions(model, df_holdout, sales_distribution) %>% 
+  mutate(
+    residual = sales - prediction
+  ) %>% 
+  as_tibble() %>% 
+  ggplot(aes(date, residual)) + 
+  geom_point()
+```
+
+# Final Model
+
+```{r}
+df_final_aggregated <- df %>% 
+  group_by(family) %>% 
+  summarise(sales = sum(sales)) %>% 
+  left_join(
+    family_cutoff_dates,
+    by = "family"
+  ) %>% 
+  filter(
+    date > family_cutoff_date
+  )
+
+df_final_aggregated
+```
+
+```{r}
+model <- lm(
+  sales ~ family + family * date - 1,
+  data = df_final_aggregated
+)
+
+final_sales_distribution <- df %>% 
+  filter(
+    date >= "2017-07-01",
+    date <= "2017-07-31"
+  ) %>% 
+  as_tibble() %>% 
+  group_by(family, store_nbr) %>% 
+  summarise(
+    sales = sum(sales)
+    , .groups = "drop"
+  ) %>% 
+  group_by(family) %>% 
+  mutate(
+    percent_sales = sales/sum(sales)
+  ) %>% 
+  select(
+    family,
+    store_nbr,
+    percent_sales
+  ) %>% 
+  ungroup()
+```
+
+
+```{r}
+get_predictions(model, df_test, final_sales_distribution)
+```
+
+```{r}
+get_predictions(model, df_test, final_sales_distribution) %>% 
+  as_tibble() %>% 
+  select(id, sales = prediction) %>% 
+  write_csv("predictions/model_v0_1_trends_only.csv")
+```
+

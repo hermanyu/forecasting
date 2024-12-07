@@ -1,0 +1,304 @@
+
+# Trends
+
+```{r, warning = FALSE, message = FALSE}
+library(dplyr)
+library(tsibble)
+library(feasts)
+library(stringr)
+library(lubridate)
+library(readr)
+library(tidyr)
+library(ggplot2)
+library(ggcorrplot)
+
+DATA_DIR = paste0(Sys.getenv("DATA_DIR"), "/store-sales-time-series")
+
+TRAIN_PATH = paste0(DATA_DIR, "/train.csv")
+TEST_PATH = paste0(DATA_DIR, "/test.csv")
+
+# give ourselves 3 months worth of holdout data
+training_end_date = "2017-04-30"
+
+# load training dataset
+df = read_csv(TRAIN_PATH) %>% 
+  tsibble(
+    key = c(store_nbr, family),
+    index = date
+  )
+
+df_holdout <- df %>% 
+  filter(
+    date > training_end_date
+  )
+
+df <- df %>% 
+  filter(
+    date <= training_end_date
+  )
+```
+
+```{r}
+df
+```
+
+
+The most basic feature of a time-series is it's trend. Our dataset contains 33 families x 54 stores = 1,782 distinct time-series. To make the problem more tractable, we start by looking at trends by family, then trends by store.
+
+# Family Trends
+
+```{r, messaage = FALSE}
+family_sales <- df %>% 
+  group_by(family) %>% 
+  summarise(
+    sales = sum(sales)
+  )
+
+families <- family_sales %>% 
+  distinct(family) %>% 
+  pull("family")
+
+for (i in seq(1, length(families))){
+  plot(
+    family_sales %>% 
+      filter(
+        family == families[i]
+      ) %>% 
+      autoplot(sales) + 
+      geom_smooth(method = "lm") +
+      labs(title = families[i])
+  )
+}
+```
+
+* Most families either trend up linearly or remain flat. The only exception is the Books family, which did launched in 2016 and has been exponentially decaying downward.
+* Some of the families have 0 sales at earlier years, causing an the trend to incorrectly go up. Some families also have jumps in the data. The trends might be better captured by filtering down to more recent dates (e.g. 2016 only) or by starting from the very last date with zero sales (for each family).
+
+
+```{r}
+cutoff_dates <- c(
+  "AUTOMOTIVE" = "2013-01-01",
+  "BABY CARE" = "2016-01-01",
+  "BEAUTY" = "2013-01-01",
+  "BEVERAGES" = "2015-06-01",
+  "BOOKS" = "2016-10-12",
+  "BREAD/BAKERY" = "2013-01-01",
+  "CELEBRATION" = "2016-01-01",
+  "CLEANING" = "2013-01-01",
+  "DAIRY" = "2014-01-01",
+  "DELI" = "2013-01-01",
+  "EGGS" = "2013-01-01",
+  "FROZEN FOODS" = "2013-01-01",
+  "GROCERY I" = "2013-01-01",
+  "GROCERY II" = "2013-01-01",
+  "HARDWARE" = "2013-01-01",
+  "HOME AND KITCHEN I" = "2015-01-01",
+  "HOME AND KITCHEN II" = "2015-06-01",
+  "HOME APPLIANCES" = "2013-01-01",
+  "HOME CARE" = "2015-06-01",
+  "LADIESWEAR" = "2015-06-01",
+  "LAWN AND GARDEN" = "2016-12-01",
+  "LINGERIE" = "2013-01-01",
+  "LIQUOR,WINE,BEER" = "2013-01-01",
+  "MAGAZINES" = "2016-01-01",
+  "MEATS" = "2013-01-01",
+  "PERSONAL CARE" = "2013-01-01",
+  "PET SUPPLIES" = "2015-06-01",
+  "PLAYERS AND ELECTRONICS" = "2015-06-01",
+  "POULTRY" = "2014-01-01",
+  "PREPARED FOODS" = "2013-01-01",
+  "PRODUCE" = "2015-06-01",
+  "SCHOOL AND OFFICE SUPPLIES" = "2015-06-01",
+  "SEAFOOD" = "2014-01-01"
+)
+
+cutoff_dates <- tibble(
+  family = names(cutoff_dates),
+  cutoff_date = cutoff_dates
+)
+
+cutoff_dates
+```
+
+```{r}
+family_sales <- df %>% 
+  group_by(family) %>% 
+  summarise(
+    sales = sum(sales)
+  ) %>% 
+  left_join(
+    cutoff_dates,
+    by = "family"
+  ) %>% 
+  filter(
+    date >= cutoff_date
+  )
+
+families <- family_sales %>% 
+  distinct(family) %>% 
+  pull("family")
+
+for (i in seq(1, length(families))){
+  plot(
+    family_sales %>% 
+      filter(
+        family == families[i]
+      ) %>% 
+      autoplot(sales) + 
+      geom_smooth(method = "lm") +
+      labs(title = families[i])
+  )
+}
+```
+
+* Selecting specific cutoff dates for each family makes the trend line more accurate.
+
+It's possible that certain families move together (e.g. Beauty and Lingerie). It might be possible to group families together based on the strength of their correlation.
+
+```{r, fig.width = 12, fig.height = 12}
+family_sales <- df %>% 
+  group_by(family) %>% 
+  summarise(
+    sales = sum(sales)
+  ) %>% 
+  pivot_wider(
+    id_cols = "date",
+    names_from = family,
+    values_from = sales,
+    names_glue = "{family}"
+  ) %>% 
+  as_tibble() %>% 
+  select(-date)
+
+family_vars <- colnames(family)
+
+ggcorrplot(
+  cor(family_sales),
+  type = "lower",
+  hc.order = TRUE, 
+  outline.color = "white"
+)
+```
+
+Some of the families are highly correlated with each other, but it's possible that these correlations are spurious due to just trending in the same direction. A better approach would be to take a first difference and re-compare.
+
+```{r, fig.width = 12, fig.height = 12}
+family_sales <- df %>% 
+  group_by(family) %>% 
+  summarise(
+    sales = sum(sales)
+  ) %>% 
+  group_by(family) %>% 
+  mutate(
+    sales_lag1 = lag(sales, 1),
+    sales_first_diff = sales - sales_lag1
+  ) %>% 
+  ungroup() %>% 
+  filter(!is.na(sales_lag1)) %>% 
+  pivot_wider(
+    id_cols = "date",
+    names_from = family,
+    values_from = sales_first_diff,
+    names_glue = "{family}"
+  ) %>% 
+  as_tibble() %>% 
+  select(-date)
+
+ggcorrplot(
+  cor(family_sales),
+  type = "upper",
+  hc.order = TRUE,
+  outline.color = "white"
+)
+```
+
+<br>
+
+---
+
+<br>
+
+# Stores
+
+```{r}
+store_sales <- df %>% 
+  group_by(store_nbr) %>% 
+  summarise(sales = sum(sales))
+
+store_numbers <- store_sales %>% 
+  distinct(store_nbr) %>% 
+  pull("store_nbr")
+
+for (i in seq(1, length(store_numbers))){
+  plot(
+    store_sales %>% 
+      filter(
+        store_nbr == store_numbers[i]
+      ) %>% 
+      autoplot(sales) + 
+      geom_smooth(method = "lm") +
+      labs(title = store_numbers[i])
+  )
+}
+```
+
+* Store sales also exhibit interesting jumps. It's likely that certain stores specialize in certain products, so jumps in store sales are correlated with jumps in family sales.
+
+```{r}
+store_sales <- df %>% 
+  group_by(store_nbr) %>% 
+  summarise(sales = sum(sales))
+
+store_cutoff_dates <- store_sales %>% 
+  filter(
+    sales == 0,
+    (month(date) != 1)
+  ) %>% 
+  as_tibble() %>%
+  group_by(store_nbr) %>% 
+  summarise(
+    store_cutoff_date = max(date) 
+  )
+
+store_numbers <- store_sales %>% 
+  distinct(store_nbr) %>% 
+  pull("store_nbr")
+
+store_sales <- store_sales %>% 
+  left_join(
+    store_cutoff_dates,
+    by = "store_nbr"
+  ) %>% 
+  mutate(
+    store_cutoff_date = ifelse(is.na(store_cutoff_date), ymd("2013-01-01"), store_cutoff_date)
+  ) %>% 
+  filter(
+    date > store_cutoff_date
+  )
+
+for (i in seq(1, length(store_numbers))){
+  plot(
+    store_sales %>%
+      filter(
+        store_nbr == store_numbers[i]
+      ) %>%
+      autoplot(sales) +
+      geom_smooth(method = "lm") +
+      labs(title = store_numbers[i])
+  )
+}
+```
+
+# Family x Store
+
+```{r}
+df %>% 
+  filter(
+    date > "2015-03-01",
+    family == "AUTOMOTIVE",
+    store_nbr %in% c(1, 2, 3)
+  ) %>% 
+  ggplot(aes(x = date, y = sales, color = as.factor(store_nbr))) + 
+  geom_line()
+```
+

@@ -1,4 +1,4 @@
-# 01: Manipulating Time-Series Data With `tsibble`  
+# 01 Manipulating Time-Series Data With `tsibble`  
 
 <br>
 
