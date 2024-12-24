@@ -3,5 +3,9 @@
 .RData
 .Ruserdata
 
+.Renviron
+
 .csv
 .html
+
+sandbox/
