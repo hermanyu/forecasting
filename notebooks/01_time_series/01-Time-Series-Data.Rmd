@@ -1,0 +1,192 @@
+---
+title: "01: Time Series Data"
+author: "Herman Yu"
+output:
+  rmdformats::downcute
+---
+
+# Introduction
+
+*Forecasting* is process of predicting future values of a *time-series* object. In order to understand forecasting methods, we must first endeavor to understand the underlying time-series objects of study. This section will introduce the concept of time-series objects and their properties which are most useful.
+
+
+---
+
+# 1.1 Time Series Data
+
+A **time-series** is a sequence of random variables $(Y_t)_{t\in\mathbb{R}}$ indexed by a time parameter $t$. The time-series is *discrete* if the sequence is indexed by a discrete set. We will mainly focus on discrete time-series and write $\ldots, Y_{t-1}, Y_t, Y_{t+1}, \ldots$ to indicate the natural ordering of the indexes.
+
+A **time-series sample** is an observed realization of the time-series: $y_0, y_1, \ldots, y_T$. Notice that the true data generation process $(Y_t)$ can stretch infinitely into the past and future, but an observed data sample must start and end at some point in time. This presents the first major challenge to time-series analysis and forecasting: how do we extrapolate properties of the infinite process $(Y_t)$ from a finite sample of observed values $(y_t)$?
+
+**Forecasting** is the process of predicting a future value $y_t$ for some $t>T$ using information known at time $T$. Since the underlying process $Y_t$ is a random variable, we cannot hope to predict $y_t$ exactly. The next best alternative is to provide a point estimate for $y_t$ equipped with a *prediction interval* $(y - \delta, y + \delta)$. How we derive these point estimates and prediction intervals is the central question of interest in forecasting.
+
+## The Trivial Case
+
+If the $(Y_t)$ are i.i.d, then $Y_t = Y$ for all $t$ and the study of the time-series $(Y_t)$ reduces to the study $Y$. In this case, the time-series sample $y_0,\ldots, y_T$ can be pooled into a sample from a single distribution $Y$. Classical statistics can then be used to analyze the data: sample means, sample variance, $t$-distributions, etc.
+
+## The Non-Trivial Case
+
+The issue is that real-word time-series processes $(Y_t)$ are *almost never* i.i.d. For example: price of a stock $Y_t$ at time $t$ will generally be very close to the price $Y_{t-1}$ at time $t-1$; this property is called *autocorrelation* and violates the independence assumption needed to do traditional statistics. Another example: the Gross Domestic Product (GDP) of the United States has risen steadily over the last 100 years; this property is called a *trend* and implies that the expected value for the time-series is different at various points in time (hence the distributions are not identical). Time series analysis aims to develop the theory and machinery necessary to answer questions about statistical inference in the face of autocorrelated and/or trended data. 
+
+# 1.2 Trended Data And Autocorrelation
+
+The problem of trended data is analogous to a problem in traditional regression where the expected value of $Y$ changes w.r.t. some predictor variable $X$:
+
+$$
+E[Y|X] = f(x)
+$$
+
+Traditional statistics solves this problem by decomposing $Y$ into a "deterministic" piece and a "random error" piece:
+
+$$
+Y = f(X) + \epsilon\\
+\epsilon \sim N(0, \sigma^2)
+$$
+
+Statistical inference is then done on the *error* term to generate confidence intervals and p-values. This inspires the following approach in time series analysis:
+
+$$
+Y_t = Tr(t) + S(t) + \epsilon_t
+$$
+
+where the time series $Y_t$ is decomposed into a *trend* component $Tr(t)$, a seasonality component $S(t)$, and an error term $\epsilon_t$. Unlike traditional regression analysis, the error terms $\epsilon_t$ in time-series analysis are not assumed to be independent and are allowed to be autocorrelated. Since the error terms are no longer i.i.d, the next best alternative is to hope for a property called *stationarity*:
+
+$$
+F_Y(Y_{t_1},\ldots,Y_{t_n}) = F_Y(Y_{t_1 + \tau}, \ldots, Y_{t_n + \tau}) \qquad \forall \tau,t_1,\ldots,t_n \in \mathbb{R}
+$$
+
+where $F_Y$ is the unconditional joint distribution (i.e. no reference to a starting value). This simply says that the joint distribution $F_Y$ does not change when we shift across time. This invariance to time-shifts is important since it allows us to use a finite observed sample to infer properties on the past data generation process, and shift those properties forward in time to make statements about the future.
+
+# 1.3 Example: Forecasting The Trivial Case
+
+As an example consider the following data generation process: $Y_t \sim N(\mu, \sigma^2)$ for all $t$. We may write $Y_t = \mu + \epsilon$ where $\epsilon = N(0, \sigma^2)$. Suppose we observed a realized value $y_t$ for each of $Y_1, Y_2,\ldots, Y_{30}$:
+
+
+```{r, warning=FALSE, message=FALSE}
+options(scipen = 999)
+library(DT)
+library(dplyr)
+library(ggplot2)
+
+set.seed(1738)
+
+# create a new data generation process
+# by generating some fixed (but unknown) parameters
+mu <- runif(1, min = 50, max = 75)
+sigma <- runif(1, min = 1, max = 10)
+
+# time index: t=1, ..., t=30
+t <- seq(1, 30, by = 1)
+
+# generate observed, realized values for Y_1,...,Y_30
+y <- rnorm(length(t), mu, sd = sigma)
+
+data <- tibble(
+  t = t,
+  y = y
+)
+
+ggplot(data, aes(x = t, y = y)) + 
+  geom_line()
+```
+
+Since the $Y_t$ are i.i.d. with $Y_t \sim N(\mu,\sigma^2)$, we can generate a prediction for $y_{t+1}$ by estimating the single population level parameter $\mu$. The sample mean $\overline{y}$ is an unbiased estimate for $\mu$, so our prediction for $y_{t+1}$ is simply the sample average:
+
+$$
+y_{t+1} \approx \overline{y} = \frac{1}{30}\sum_{t=1}^{30}y_t
+$$
+
+To generate a prediction interval, we again leverage the fact that the $Y_t$ are i.i.d, so: 
+
+$$
+Y_{t+1} \sim Y_t \sim \ldots \sim Y_1 \sim N(\mu, \sigma^2)
+$$
+
+In particular, the random variable $Y_{t+1} - \overline{Y}$ has variance:
+
+$$
+Var(Y_{t+1} - \overline{Y}) = Var(Y_{t+1}) + Var(\overline{Y}) = \sigma^2 + \frac{\sigma^2}{30}
+$$
+
+Since each $Y_t$ is normal, their weighted sum $overline{Y} = \frac{1}{30}\sum_{t=1}^{30}Y_t$ is also normal. Therefore the random variable $Y_{t+1} - \overline{Y}$ is normal. This yields:
+
+$$
+\frac{Y_{t+1} - \overline{Y}}{\sqrt{\sigma^2 + \frac{\sigma^2}{30}}} \sim N(0,1)
+$$
+
+Replacing $\overline{Y}$ with its point estimate $\overline{y}$ and the unknown $\sigma^2$ with the sample variance $s = \frac{1}{29}\sum_{t=1}^{30}(y_t - \overline{y})^2$, we get a $t$-distribution with 29 degrees of freedom:
+
+$$
+\frac{Y_{t+1} - \overline{y}}{s\sqrt{1 + \frac{1}{30}}} =: t \sim t_{29}
+$$
+
+Different predicted values $y_{t+1}$ of $Y_{t+1}$ will yield different values of the quantity $t$. But since $t$ follows a $t$-distribution, we can compute the 5-95% quantiles of $t$, say:
+
+$$
+t_{29, 0.05} := \alpha \text{ such that } Pr(t < \alpha ) = 0.05\\
+t_{29, 0.95} := \alpha \text{ such that } Pr(t < \alpha ) = 0.95
+$$
+
+From these quantile values, we can reverse-engineer the $y_{t+1}$ values needed obtain $t_{29, 0.05}$ and $t_{29, 0.95}$:
+
+$$
+y_{t+1, 0.05} = t_{29, 0.05}\cdot s\sqrt{1 + \frac{1}{30}} + \overline{y}\\
+y_{t+1, 0.95} = t_{29, 0.95}\cdot s\sqrt{1 + \frac{1}{30}} + \overline{y}\\
+$$
+
+```{r}
+# create function to reverse-engineer y value given t value
+sample_mean <- mean(y)
+sample_sd <- sd(y)
+
+get_y_from_t <- function(t, mean, sd, n){
+  return( (t*sd*sqrt(1 + (1/(n-1)))) + mean )
+}
+
+# compute the t values for the lower- and upperbounds 
+# that capture 90% of all t-values
+df = length(y) - 1
+
+t_lower <- qt(p = 0.05, df = df)
+t_upper <- qt(p = 0.95, df = df)
+
+# reverse-engineer to get lower- and upperbounds
+# that capture 90% of all y-values
+y_lower <- get_y_from_t(t_lower, mean = sample_mean, sd = sample_sd, n = length(y))
+y_upper <- get_y_from_t(t_upper, mean = sample_mean, sd = sample_sd, n = length(y))
+
+DT::datatable(
+  tibble(
+    `Prediction (Lower Bound)`= y_lower,
+    `Prediction` = sample_mean,
+    `Prediction (Upper Bound)` = y_upper
+  )
+)
+```
+
+The table above gives the 90% prediction interval for value $y_{t+1}$. Since we know the underlying data generation process is $N(\mu,\sigma^2)$ (we engineered it ourselves!), we can check the validity of this interval by drawing a random sample of 10,000 values from the $N(\mu,\sigma^2)$ distribution and checking if approximately 90% of the values actually fall within the interval:
+
+```{r}
+# simulate 10,000 runs of y_{t+1}
+# and count how many simulated y_{t+1} values
+# actually lie within the prediction interval
+set.seed(1738)
+
+validation_set_size = 10000
+validation_set <- rnorm(validation_set_size, mean = mu, sd = sigma)
+
+within_interval_count <- length(
+  validation_set[ validation_set >= y_lower & validation_set <= y_upper ]
+)
+
+# remove from memory to avoid taking up RAM
+rm(validation_set)
+
+within_interval_count / validation_set_size
+```
+
+Indeed, we see that 90% of the time, the value of $y_{t+1}$ will fall within the prediction interval.
+
+
+---
+
