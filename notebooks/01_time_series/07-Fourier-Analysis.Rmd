@@ -1,0 +1,561 @@
+---
+title: "07: Fourier Analysis"
+author: "Herman Yu"
+output:
+  rmdformats::downcute
+---
+
+# Introduction
+
+# 7.1 Fourier Series
+
+The study of seasonal patterns within a time series is fundamentally a study of periodic functions. In the 1807, French mathematician Joseph Fourier discovered that any continuously differentiable periodic function $S(t)$ has a representation as a trigonometric series on the interval $[0, p]$:
+
+$$
+S(t) = a_0 + \sum_{m=1}^{\infty}a_n\cos\left(\frac{2\pi nt}{p}\right) + \sum_{n=1}^{\infty}b_n\sin\left(\frac{2\pi nt}{p}\right)
+$$
+
+Intuitively, Fourier proved that *any* smooth periodic function (no matter how complex) can always be reconstructed by just adding together simple sinusoid waves. This series representation is called the **Fourier series** of $S(t)$ and the coefficients $a_m, b_n$ are called the **Fourier coefficients**.
+
+The reason this result is so useful is because *every* smooth periodic function can now be reconstructed using a tuple of numbers:
+
+$$
+S(t) \iff (a_0, a_1, b_1,\ldots, a_n, b_n,\ldots)
+$$
+
+The major implication here is that the function $S(t)$ can be approximated by taking the $N$-largest coefficients. This is exactly how a computer is able to record and playback sound waves.
+
+# 7.2 Fourier Coefficients
+
+Fourier's theorem is interesting from a theoretical standpoint, but it would not be useful unless we had a way to figure out the actual Fourier coefficients. Thankfully, Fourier's original proof was constructive; he showed the existence of the Fourier series by providing an algorithm for constructing each coefficient.
+
+So let $S(t)$ be a periodic function with period $p$. By Fourier's Theorem, write:
+
+$$
+\begin{align*}
+S(t) &= a_0 + \sum_{n=1}^{\infty}a_n\cos\left(\frac{2\pi nt}{p}\right) + \sum_{n=1}^{\infty}b_n\sin\left(\frac{2\pi nt}{p}\right)\\
+&= a_0 + \sum_{n=1}^{\infty}a_n\cos\left(\frac{2\pi nt}{p}\right) + b_n\sin\left(\frac{2\pi nt}{p}\right)
+\end{align*}
+$$
+
+The algorithm (given below) will result in the following formulas for obtaining the coefficients:
+
+$$
+\begin{align*}
+a_0 &= \frac{1}{p}\int_0^p S(t) \,\,dt \\
+a_n &= \frac{2}{p}\int_0^p \cos\left(\frac{2\pi nt}{p}\right)\cdot S(t)\,\,dt\\
+b_n &= \frac{2}{p}\int_0^p \sin\left(\frac{2\pi nt}{p}\right)\cdot S(t)\,\,dt\\
+\end{align*}
+$$
+
+## Getting $a_0$
+
+Since $S(t)$ has period $p$, consider what happens when we integrate $S(t)$ over $0\leq t\leq p$:
+
+$$
+\begin{align*}
+\int_0^p S(t) \,\,dt &= \int_0^p a_0 + \sum_{n=1}^{\infty}a_n\cos\left(\frac{2\pi nt}{p}\right) + b_n\sin\left(\frac{2\pi nt}{p}\right) \,\,dt\\
+&= \int_0^p a_0 \,\,dt + \sum_{n=1}^{\infty}a_n\int_0^p\cos\left(\frac{2\pi nt}{p}\right)\,\,dt + b_n\int_0^p\sin\left(\frac{2\pi nt}{p}\right)\,\,dt\\
+&=p\cdot a_0 + \sum_{m=1}^{\infty}a_m\cdot 0 + \sum_{n=1}^{\infty}b_n\cdot 0\\
+\int_0^pS(t)\,\,dt &= p\cdot a_0\\
+\end{align*}
+$$
+Note that the integral distributes over the infinite sums (which is a non-trivial statement). Furthermore that the integrals of the sine and cosine functions evaluate to 0 because they have period $p$ (this one is much easier to justify since it can directly be shown by integrating the sine and cosine functions directly).
+
+Therefore:
+
+$$
+a_0 = \frac{1}{p}\int_0^p S(t)\,\,dt
+$$
+
+## Getting $a_n$
+
+To get the $a_n$ coefficient, the key insight is that interaction terms between sine and cosine waves will *integrate to 0*:
+
+$$
+\begin{align*}
+\int_0^p \sin\left(\frac{2\pi mt}{p}\right) \cos\left(\frac{2\pi nt}{p}\right)\,\,dt &= \frac{1}{2}\int_0^p\sin\left(\frac{2\pi mt}{p} + \frac{2\pi nt}{p}\right) + \sin\left(\frac{2\pi mt}{p} - \frac{2\pi nt}{p}\right)\,\,dt\\
+&=\frac{1}{2}\int_0^p\sin\left(\frac{2\pi (m+n)t}{p}\right) + \sin\left(\frac{2\pi (m-n)t}{p}\right)\,\,dt\\
+&=\frac{1}{2}\left(-\frac{p}{2\pi(m+n)}\cos\left(\frac{2\pi (m+n)t}{p}\right) -\frac{p}{2\pi(m-n)}\cos\left(\frac{2\pi (m-n)t}{p}\right)\right)_0^p\\
+&= \frac{1}{2}\left[-\frac{p}{2\pi (m+n)} + \frac{p}{2\pi (m+n)}\right] - \frac{1}{2}\left[-\frac{p}{2\pi (m-n)} + \frac{p}{2\pi (m-n)} \right]\\
+&= \frac{1}{2}\cdot 0 - \frac{1}{2}\cdot 0\\
+&= 0
+\end{align*}
+$$
+
+Similarly, interaction terms between pairs of cosine waves will also integrate to 0 *except* when the frequencies are the same. If $m\neq n$ then:
+
+$$
+\begin{align*}
+\int_0^p\cos\left(\frac{2\pi mt}{p}\right) \cos\left(\frac{2\pi nt}{p}\right)\,\,dt &=  \frac{1}{2}\int_0^p\cos\left(\frac{2\pi mt}{p} + \frac{2\pi nt}{p}\right) + \cos\left(\frac{2\pi mt}{p} - \frac{2\pi nt}{p}\right)\,\,dt\\
+&= \frac{1}{2}\int_0^p\cos\left(\frac{2\pi (m+n)t}{p}\right) + \cos\left(\frac{2\pi (m-n)t}{p}\right)\,\,dt\\
+&=\frac{1}{2}\left(\frac{p}{2\pi(m+n)}\sin\left(\frac{2\pi (m+n)t}{p}\right) + \frac{p}{2\pi(m-n)}\sin\left(\frac{2\pi (m-n)t}{p}\right)\right)_0^p\\
+&= 0
+\end{align*}
+$$
+
+When $m = n$, we get instead:
+
+$$
+\begin{align*}
+\int_0^p\cos\left(\frac{2\pi mt}{p}\right) \cos\left(\frac{2\pi nt}{p}\right)\,\,dt &= \int_0^p\cos^2\left(\frac{2\pi nt}{p}\right)\,\,dt\\
+&= \int_0^p\frac{1 + \cos(4\pi nt/p)}{2}\,\,dt\\
+&= \left[\frac{1}{2}t + \frac{p}{8\pi nt}sin\left(\frac{4\pi nt}{p}\right) \right]_0^p\\
+&= \frac{p}{2} + 0 \\
+&= \frac{p}{2}
+\end{align*}
+$$
+
+So for a fixed frequency $m$, we have:
+
+$$
+\begin{align*}
+\int_0^p \cos\left( \frac{2\pi mt}{p} \right) \cdot S(t)\,\,dt &= \int_0^p a_0 \cos\left( \frac{2\pi mt}{p} \right) \,\, dt + \sum_{n=1}^{\infty}\int_0^pa_n \cos\left( \frac{2\pi mt}{p} \right)\cos\left( \frac{2\pi nt}{p} \right) \,\, dt + \int_0^p b_n \cos\left( \frac{2\pi mt}{p} \right)\sin\left( \frac{2\pi nt}{p} \right) \,\,dt\\
+&= 0 + a_m\frac{p}{2} + 0\\
+&= a_m\frac{p}{2}
+\end{align*}
+$$
+Therefore to get the coefficient $a_n$ we have:
+
+$$
+a_n = \frac{2}{p}\int_0^p \cos\left(\frac{2\pi nt}{p}\right) S(t)\,\,dt
+$$
+
+## Getting $b_n$
+
+Similar logic can be applied to yield the formula:
+
+$$
+b_n = \frac{2}{p}\int_0^p \sin\left(\frac{2\pi nt}{p}\right) S(t) \,\,dt
+$$
+
+
+# 7.3 Complex Fourier Series
+
+Euler's identity gives us:
+
+$$
+e^{iat} = \cos(at) + i\sin(at)
+$$
+from which we can derive:
+
+$$
+\cos(at) = \frac{e^{iat} + e^{-iat}}{2}\\
+\sin(at) = \frac{e^{iat} - e^{-iat}}{2i}
+$$
+
+Plugging these into the trigonometric Fourier series of $S(t)$ will yield:
+
+$$
+\begin{align*}
+S(t) &= a_0 + \sum_{n=1}^{\infty}a_n\cos\left(\frac{2\pi nt}{p}\right) + b_n\sin\left(\frac{2\pi nt}{p}\right)\\
+&= a_0 + \sum_{n=1}^{\infty}a_n\frac{e^{i(2\pi n/p)t} + e^{-i(2\pi n/p)t}}{2}+ b_n\frac{e^{i(2\pi n/p)t}-e^{-i(2\pi n/p)t}}{2i}\\
+&= a_0 + \sum_{n=1}^{\infty}a_n\frac{e^{i(2\pi n/p)t} + e^{-i(2\pi n/p)t}}{2} + b_n\frac{e^{i(2\pi n/p)t}-e^{-i(2\pi n/p)t}}{2i} \\
+&= a_0 + \sum_{n=1}^{\infty}\frac{a_n - ib_n}{2}e^{i(2\pi n/p)t} + \frac{a_n + ib_n}{2}e^{-i(2\pi n/p)t}\\
+&= a_0 + \sum_{n=1}^{\infty}\frac{a_n - ib_n}{2}e^{i(2\pi n/p)t} + \sum_{n=-1}^{-\infty}\frac{a_n + ib_n}{2}e^{i(2\pi n/p)t}\\
+&= \sum_{n=-\infty}^{\infty}c_n e^{i(2\pi n/p)t}
+\end{align*}
+$$
+
+where:
+
+$$
+c_n = \begin{cases}
+a_0 & n=0\\
+\frac{a_n - ib_n}{2} & n>0\\
+\frac{a_n + ib_n}{2} & n<0
+\end{cases}
+$$
+
+This motivates a more general definition: the **complex Fourier series** of $S(t)$ is:
+
+$$
+S(t) = \sum_{n=-\infty}^{\infty}c_n e^{i(2\pi n/p)t}
+$$
+
+where the coefficients $c_n$ can be any complex number (so long as the series is convergent). Similar logic to before will yield the general formula for $c_n$:
+
+$$
+c_n = \frac{1}{p}\int_0^p S(t)\cdot e^{-i(2\pi n/p)t}\,\,dt
+$$
+
+Without further restrictions to $c_n$, the function $S(t)$ can now take on complex values. However, the special case where $S(t)$ is real-valued will occur *if and only if* $c_n = c_{-n}^*$, that is the positive and negative indices correspond to to complex conjugate pairs. In this case, we can recover the real-valued trigonometric Fourier coefficients $a_n$ and $b_n$ as:
+
+$$
+a_n = 2\cdot Re(c_n)\\
+b_n = -2\cdot Im(c_n)
+$$
+
+In other words, for a (smooth) real-valued periodic function $S(t)$, there are 3 different ways to represent $S(t)$:
+
+$$
+S(t) \iff a_0 + \sum_{n=1}^{\infty}a_n\cos\left(\frac{2\pi nt}{p}\right) + b_n\sin\left(\frac{2\pi nt}{p}\right) \iff \sum_{n=-\infty}^{\infty}c_n e^{i(2\pi n/p)t}
+$$
+
+# 7.4 Example: Additive Synthesis Of Waveforms
+
+## The Saw Wave
+
+The **saw wave** with period $p$ and ampltiude $A$ is defined as:
+
+$$
+S(t) = A\cdot\left( \frac{t}{p} - \left\lfloor \frac{t}{p}\right\rfloor\right)
+$$
+
+```{r, warning=FALSE, message=FALSE}
+library(dplyr)
+library(tsibble)
+library(feasts)
+library(ggplot2)
+saw_wave <- function(t, p = 1, A = 1){
+  return(A * ((t/p) - as.integer(t/p)))
+}
+
+t <- seq(0, 10, by = 0.01)
+p <- 2.2
+A <- 5.3
+
+data <- tibble(
+  t = t,
+  y = saw_wave(t, p, A)
+) %>% 
+  as_tsibble(index = t)
+
+data %>% 
+  autoplot(y)
+```
+
+The period of the saw wave above is $p = 1.2$ with amplitude $A = 5.3$. We can compute complex Fourier series of $S(t)$ by computing each $c_n$. For $n=0$, we have:
+
+$$
+\begin{align*}
+c_0 &= \frac{1}{p}\int_0^pS(t)\,\,dt\\
+&=\frac{1}{p} \int_0^p A\left( \frac{t}{p} - \left\lfloor \frac{t}{p}\right\rfloor\right) \,\,dt\\
+&= \frac{A}{p}\int_0^p\frac{t}{p}\,\,dt\\
+&=\frac{A}{p}\left[\frac{t^2}{2p} \right]_0^p\\
+&= \frac{A}{p}\left[\frac{p^2}{2p} - \frac{0}{2p}\right]\\
+&= \frac{A}{2}
+\end{align*}
+$$
+
+where we are leveraging the fact that the floor function $\lfloor t/p \rfloor$ is 0 on the interval of integration $[0,p]$. For $n \neq 0$, we have:
+
+$$
+\begin{align*}
+c_n &= \frac{1}{p}\int_0^pS(t)e^{-i(2\pi n/p)t} \,\,dt\\
+&=\frac{1}{p}\int_0^pA\left( \frac{t}{p} - \left\lfloor \frac{t}{p}\right\rfloor\right)e^{-i(2\pi n/p)t} \,\,dt\\
+&=\frac{A}{p^2}\int_0^pt\cdot e^{-i(2\pi n/p)t}\,\,dt\\
+&=\frac{A}{p^2}\left[ \frac{p}{-i2\pi n}t\cdot e^{-i(2\pi n/p)t} - \frac{p^2}{(2\pi n)^2}e^{-i(2\pi n/p)t}\,\,dt \right]_0^p\\
+&=\frac{A}{p^2}\left[ \frac{p^2}{-i2\pi n}e^{-i(2\pi n)} - \frac{p^2}{(2\pi n)^2}e^{-i(2\pi n)} + \frac{p^2}{(2\pi n)^2}\right]\\
+&=\frac{A}{p^2}\left[ \frac{p^2}{-i2\pi n}\cdot 1- \frac{p^2}{(2\pi n)^2}\cdot 1 + \frac{p^2}{(2\pi n)^2}\right]\\
+&=\frac{A}{p^2}\frac{p^2}{-i2\pi n}\\
+&=\frac{iA}{2\pi n}
+\end{align*}
+$$
+
+Notice in particular then to recover the trigonometric coefficients:
+
+$$
+a_n = 2\cdot Re(c_n) = 2\cdot Re\left(\frac{iA}{2\pi n}\right) = 0\\
+b_n = -2\cdot Im(c_n) = -2 \cdot Im\left(\frac{iA}{2\pi n}\right) = -\frac{A}{\pi n}\\
+$$
+
+Notice that as $b_n$ is monotonic decreasing as $n\to \infty$, so $b_n$ will be very small (hence have little effect) when $n$ is large. This allows us to approximate the saw wave as a summation of sine waves:
+
+$$
+S(t) = \sum_{n=1}^{\infty}\frac{A}{\pi n}\sin\left(\frac{2\pi nt}{p} \right)
+$$
+
+```{r}
+saw_coefficients <- function(n, A){
+  if (n == 0){
+    return( A/2 )
+  } else {
+    return( -A/(pi*n) ) 
+  }
+}
+
+saw_fourier_series <- function(t, N, p, A){
+  series <- saw_coefficients(0, A)
+  
+  const_2pi <- 2*pi
+  if (N == 0){
+    return(series)
+  } else {
+    for (n in seq(1, N)){
+      series <- series + (saw_coefficients(n, A) * sin(const_2pi * n * t/p))
+    }
+    return(series)
+  }
+}
+
+t <- seq(0, 10, by = 0.01)
+p <- 2.2
+A <- 5.3
+
+data <- tibble(
+  t = t,
+  y = saw_wave(t, p, A),
+  fourier_0 = saw_fourier_series(t, N=0, p, A),
+  fourier_2 = saw_fourier_series(t, N=2, p, A),
+  fourier_10 = saw_fourier_series(t, N=10, p, A)
+)
+
+data %>% 
+  ggplot(aes(x = t)) + 
+  geom_line(aes(y = y)) + 
+  geom_line(aes(y = fourier_0), color = "red") + 
+  geom_line(aes(y = fourier_2), color = "blue") + 
+  geom_line(aes(y = fourier_10), color = "purple") + 
+  labs(title = "Saw Wave (Fourier Series Approximation)")
+```
+
+## The Square Wave
+
+The **square wave** with period $p$ and amplitude $A$ is defined as:
+
+$$
+S(t) = \frac{A}{2}\left( 1 + sgn\left(\sin\frac{2\pi t}{p} \right) \right)
+$$
+
+```{r}
+square_wave <- function(t, p = 1, A = 1){
+  return( (A/2) * ( 1 + sign( sin(2*pi*t/p) ) ) )
+}
+
+t <- seq(0, 10, by = 0.01)
+p <- 3.8
+A <- 3.7
+
+data <- tibble(
+  t = t,
+  y = square_wave(t, p, A)
+) %>% 
+  as_tsibble(index = t)
+
+data %>% 
+  autoplot(y)
+```
+
+The complex Fourier coefficients are computed as follows: for $n=0$, we have
+
+$$
+\begin{align*}
+c_0 &= \frac{1}{p}\int_0^pS(t)\,\,dt\\
+&= \frac{1}{p}\cdot \frac{Ap}{2}\\
+&= \frac{A}{2}
+\end{align*}
+$$
+
+where we leverage the fact that $\int_0^p S(t)dt$ is just the area under the curve, which can be directly observed because of the rectangular nature of the wave. For $n\neq 0$, we have:
+
+$$
+\begin{align*}
+c_n &= \frac{1}{p}\int_0^pS(t)e^{-i(2\pi n/p)t} \,\,dt\\
+&= \frac{1}{p}\int_0^p \frac{A}{2}\left( 1 + sgn\left(\sin\frac{2\pi t}{p} \right) \right) e^{-i(2\pi n/p)t} \,\,dt\\
+&= \frac{A}{2p}\int_0^p e^{-i(2\pi n/p)t} \,\,dt + \int_0^p e^{-i(2\pi n/p)t} sgn\left(\sin\frac{2\pi t}{p} \right) \,\,dt\\
+&= \frac{A}{2p} \left[ \frac{p e^{-i(2\pi n/p)t} }{-i2\pi n} \right]_0^p
+  + \frac{A}{2p} \left[ \int_0^{p/2} e^{-i(2\pi n/p)t} sgn\left(\sin\frac{2\pi t}{p} \right) \,\,dt
+  + \int_{p/2}^p e^{-i(2\pi n/p)t} sgn\left(\sin\frac{2\pi t}{p} \right) \,\,dt \right]\\
+&= 0 + \frac{A}{2p} \left[ \int_0^{p/2} e^{-i(2\pi n/p)t} \cdot 1 \,\,dt
+  + \int_{p/2}^p e^{-i(2\pi n/p)t} \cdot (-1)\,\,dt \right]\\
+&= \frac{A}{2p} \left[ \frac{p e^{-i(2\pi n/p)t} }{-i2\pi n}\right]_0^{p/2}
+  - \frac{A}{2p} \left[ \frac{p e^{-i(2\pi n/p)t} }{-i2\pi n}\right]_{p/2}^p\\
+&= \frac{A}{2p}\left[ \frac{pe^{-i\pi n}}{-i2\pi n} - \frac{p}{-i2\pi n} \right]
+  - \frac{A}{2p} \left[ \frac{ p }{-i2\pi n} - \frac{p e^{-i\pi n} }{-i2\pi n}\right]\\
+&= \frac{A}{2p}\left[ \frac{ pe^{-i\pi n} - p - p + p e^{-i\pi n} }{-i2\pi n}\right]\\
+&= \frac{A}{2p}\left[ \frac{ 2pe^{-i\pi n} - 2p }{-i2\pi n}\right]\\
+&= A\left[ \frac{ e^{-i\pi n} - 1 }{-i2\pi n}\right]\\
+&= \begin{cases}
+-i\frac{A}{\pi n} & n \text{ odd }\\
+0 & n \text{ even }
+\end{cases}
+\end{align*}
+$$
+
+where we are use the fact that $e^{-ik\pi} = 1$ for all when $k$ is even and $e^{-ik\pi} = -1$ when $n$ is odd (this follows immediately from Euler's identity). In particular, the coefficients for the trigonometric Fourier series can be recovered as:
+
+$$
+a_n = 2\cdot Re(c_n) = 0\\
+b_n = -2 \cdot Im(c_n) = \begin{cases}
+\frac{2A}{\pi n} & n \text{ odd }\\
+0 & n \text{ even }
+\end{cases}
+$$
+
+Consequently, the square wave can be expressed as a sum of sine waves of the odd harmonics:
+
+$$
+S(t) = \frac{A}{2} + \sum_{k = 1}^{\infty}\frac{2A}{\pi(2k+1)}\sin\left(\frac{2\pi (2k+1)t}{p}\right)
+$$
+
+```{r}
+square_coefficients <- function(n, A){
+  if (n == 0){
+    return( A/2 )
+  } else if (n %% 2 == 0) {
+    return( 0 ) 
+  } else {
+    return( (2*A)/(pi * n) )
+  }
+}
+
+square_fourier_series <- function(t, N, p, A){
+  series <- square_coefficients(0, A)
+  
+  const_2pi <- 2*pi
+  if (N == 0){
+    return(series)
+  } else {
+    for (n in seq(1, N)){
+      series <- series + (square_coefficients(n, A) * sin(const_2pi * n * t/p))
+    }
+    return(series)
+  }
+}
+
+t <- seq(0, 10, by = 0.01)
+p <- 2.2
+A <- 5.3
+
+data <- tibble(
+  t = t,
+  y = square_wave(t, p, A),
+  fourier_0 = square_fourier_series(t, N=0, p, A),
+  fourier_2 = square_fourier_series(t, N=2, p, A),
+  fourier_10 = square_fourier_series(t, N=10, p, A)
+)
+
+data %>% 
+  ggplot(aes(x = t)) + 
+  geom_line(aes(y = y)) + 
+  geom_line(aes(y = fourier_0), color = "red") + 
+  geom_line(aes(y = fourier_2), color = "blue") + 
+  geom_line(aes(y = fourier_10), color = "purple") + 
+  labs(title = "Square Wave (Fourier Series Approximation)")
+```
+
+# 7.5 Fourier Regression Models
+
+```{r}
+library(fpp3)
+
+data <- aus_production %>% 
+  select(Quarter, Electricity) %>% 
+  mutate(
+    trend = slider::slide_dbl(
+      .x = Electricity,
+      .f = mean,
+      .before = 10,
+      .after = 10
+    ),
+    detrended = Electricity - trend
+  )
+
+data %>% 
+  autoplot(detrended)
+```
+
+
+```{r}
+period <- 4
+N <- min(period, 10)
+
+TWO_PI <- 2*pi
+
+modeling_data <- data %>% 
+  mutate(
+    t = row_number()
+  )
+
+for (i in seq(1, N)){
+  col_cos <- paste0('cos_', i)
+  col_sin <- paste0('sin_', i)
+  modeling_data <- modeling_data %>% 
+    mutate(
+      !!sym(col_cos) := cos(TWO_PI*i*t/N),
+      !!sym(col_sin) := sin(TWO_PI*i*t/N)
+    )
+}
+
+modeling_data <- modeling_data %>% 
+  as_tibble() %>% 
+  select(
+    Quarter,
+    t,
+    detrended,
+    contains('cos_'),
+    contains('sin_')
+  )
+
+modeling_data
+```
+
+```{r}
+modeling_data %>% 
+  select(
+    -c(
+      Quarter,
+      t,
+      detrended,
+      cos_4,
+      sin_2,
+      sin_3,
+      sin_4
+    )
+  )%>% 
+  cor()
+```
+
+
+```{r}
+seasonal_model <- lm(
+  detrended ~ . - 1,
+  data = modeling_data %>% 
+    select(
+      -c(
+        Quarter,
+        t,
+        cos_3,
+        cos_4,
+        sin_2,
+        sin_3,
+        sin_4
+      )
+  )
+)
+
+summary(seasonal_model)
+```
+
+
+```{r}
+modeling_data %>% 
+  mutate(
+    season = t %% 4
+  ) %>% 
+  group_by(season) %>% 
+  mutate(
+    seasonality = mean(detrended)
+  ) %>% 
+  ungroup() %>% 
+  ggplot(aes(t, detrended)) + 
+  geom_line() + 
+  geom_line(aes(y = seasonality), color = "blue", linetype = "dashed")
+```
+
+
+
+```{r}
+modeling_data %>% 
+  mutate(
+    fourier_series = (-510.59*cos_1) + (-352.98*cos_2) + (-1334.06*sin_1)
+  ) %>% 
+  ggplot(aes(t, detrended)) + 
+  geom_line() + 
+  geom_line(aes(y = fourier_series), color = "blue", linetype = "dashed")
+```
+
+
+
+---

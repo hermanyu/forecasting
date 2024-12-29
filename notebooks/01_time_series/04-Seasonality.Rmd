@@ -1,0 +1,126 @@
+---
+title: "04: Seasonality"
+author: "Herman Yu"
+output:
+  rmdformats::downcute
+---
+
+# Introduction
+
+In the previous section, we mentioned that disentangling the trend from the time series data can help us find other important features which are helpful in forecasting. The most important of such features is *seasonality* which is cyclical pattern with a fixed frequency. For example, the sales numbers for a consumer good will almost always see massive spikes around December each year due to holiday shoppers. If we can estimate expected increase in sales due to holiday shopping, we can make more accurate forecasts for December of the next year. This section will discuss how to detect seasonality in time series data using *seasonal plots*. Modeling seasonality is saved for the later section on time series decomposition models.
+
+# 4.1 Seasonality
+
+Given a time series $(Y_t)$, a **seasonal** pattern is a general pattern which repeats over some fixed and known interval time. For example, sales for consumer goods will almost always experience a surge in December due to Christmas shopping. Grocery sales will generally see higher sales on weekends when people actually have time to run errands. Note that a time series can have multiple seasonal patterns (e.g. weekend surges AND holiday surges).
+
+Formally, a function $S(t)$ is **periodic** with period $p$ if $S(t + p) = S(t)$ for all $t$. A time series process $(Y_t)$ has a **seasonal pattern** or **seasonality** if there exists a periodic function $S(t)$ such that:
+
+$$
+Y_t = S(t) + Z_t
+$$
+
+where $Z_t$ is some other random variable at time $t$. In other words, the time series process $(Y_t)$ contains some kind of periodic signal $S(t)$.
+
+Unlike trends, seasonal patterns can be much harder to discern with the naked eye. For example, consider again the Australian electricity production time series:
+
+```{r, warning=FALSE, message=FALSE}
+library(fpp3)
+library(DT)
+
+aus_electricity <- aus_production %>% 
+  select(Quarter, Electricity)
+
+aus_electricity %>% 
+  autoplot(Electricity) + 
+  labs(title = 'Australian Electricity Production')
+```
+
+We do see a wave-line pattern in the data, but it's not immediately clear whether this is due to random jumps in the data or a repeating pattern. One way to try and determine this is through a **seasonal plot**, which overlays the data by Quarter:
+
+```{r}
+# seasonal plot of Australian electricity production,
+# we use the gg_season() function in the feasts package.
+# we restrict to 1990 to 2010 for readability
+aus_electricity %>% 
+  filter(year(Quarter) >= 1990) %>% 
+  feasts::gg_season(Electricity, labels = "both") + 
+  labs(title = 'Electricity Production By Time Of Year', x = 'Time Of Year')
+```
+
+Each line corresponds to a year; the fact that the lines are parallel indicates that there is a repeating pattern within a yearly cycle. In particular, we see that electricity production increases from Q1 to Q3, then decreases from Q3 to Q4.
+
+# 4.2 Multiple Seasonal Periods
+
+Time series data can have multiple seasonal patterns, each with their own frequency. For example: consider the following data set which gives the half-hour electricity demand in Victoria, Australia:
+
+```{r}
+vic_elec %>% 
+  head() %>%
+  datatable()
+```
+
+There are multiple potential time periods to consider: daily, weekly, monthly, etc. Let's start by analyzing electricity demand by hours of the day:
+
+```{r}
+vic_elec %>% 
+  gg_season(Demand, period = 'day') + 
+  theme(legend.position = 'none') + 
+  labs(y = "Demand (MWh)", title = "Electricity Demand (By Time Of Day)")
+```
+
+We immediately see a daily pattern in electricity demand: low demand when people are asleep, increasing demand throughout the day as people are out and about. We can also examine the data by days of the week:
+
+```{r}
+vic_elec %>% 
+  gg_season(Demand, period = 'week') + 
+  theme(legend.position = 'none') + 
+  labs(y = "Demand (MWh)", title = "Electricty Demand (By Time Of Week)")
+```
+
+The seasonal pattern from the daily cycle manifests in this plot as well as we see peaks in electricity demand during mid-day. We also can make out a slight weekly pattern: electricity demand is generally lower during the weekends (Sat. and Sun.) than the weekdays.
+
+```{r}
+vic_elec %>% 
+  gg_season(Demand, period = 'year') + 
+  theme(legend.position = 'none') + 
+  labs(y = "Demand (MWh)", title = "Electricty Demand (By Time Of Year)")
+```
+
+When plotting the data by time of year, we immediately see that the largest spikes in electricity demand always occur in December, January, February, and March. These correspond to the Summer months in Australia, so it makes sense we see much larger spikes in electricity demand during this time (i.e. air conditioning).
+
+# 4.3 Seasonality By Dimensions
+
+Recall that time series data can also come in panel form, i.e. one time series per grouping. For example, consider the Australian domestic holidays data, contained in the `tourism` data set:
+
+```{r}
+holidays <- tourism %>% 
+  filter(Purpose == 'Holiday') %>% 
+  group_by(State) %>% 
+  summarise(
+    Trips = sum(Trips, na.rm = TRUE)
+  )
+
+holidays %>% 
+  head() %>% 
+  datatable()
+```
+
+Here we have a separate time series for each value of `State`. Let us consider the time series plot of each state:
+
+```{r}
+holidays %>% 
+  autoplot(Trips) + 
+  labs(title = 'Australian Domestic Holidays')
+```
+
+Some states like Victoria and NSW do seem to share seasonal patterns, since their peaks occur together. Other states like Queensland and Victoria do not seem to share a seasonal pattern since their peaks do not occur together. To get a better feeling for the patterns within each state, we make a seasonal plot by state:
+
+```{r, fig.height = 10, fig.width = 6}
+holidays %>% 
+  gg_season(Trips) + 
+  labs(title = 'Australian Domestic Holidays (By Time Of Year)')
+```
+
+From the seasonal plots, we see that NSW, South Australia, Tasmania, Victoria, and Western Australia all generally have the same seasonal pattern. Northern Terrority and Queensland have their own seasonality which seems inverted from the previous mentioned states. Finally ACT does not seem to exhiblity a yearly seasonality, since trips are relatively constant throughout the year.
+
+---

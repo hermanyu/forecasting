@@ -1,0 +1,210 @@
+---
+title: "05: Autocorrelation"
+author: "Herman Yu"
+output:
+  rmdformats::downcute
+---
+
+# Introduction
+
+In the previous section, we used seasonal plots to visually detect for seasonality. One issue that arises is that we have to know, a priori, what the seasonal frequencies might be in order to generate the seasonal plots. We could attempt to check the seasonal plots for *every* possible frequency but this would be absurdly tedious. Naturally then, we desire a more systematic way to detect seasonal patterns across many possible frequencies.
+
+One possible solution is to analyze the *autocorrelation* of the time series. Autocorrelation is an important feature of time series data that can be analyzed in the hopes of elucidating the underlying data generation process. If the autocorrelation is high at regularly spaced time steps, this is evidence of a seasonal pattern. In this section, we use the desire to detect seasonality as the motivation for introducing lag plots and autocorrelation.
+
+# 5.1 Lag Plots
+
+Recall that a seasonal pattern is a pattern which repeats with a fixed frequency of time. For example, we previously observed that Australian electricity production follows a seasonal pattern based on time of year:
+
+```{r, message=FALSE, warning=FALSE}
+library(fpp3)
+library(DT)
+
+aus_electricity <- aus_production %>% 
+  filter(year(Quarter) >= 1990) %>% 
+  select(Quarter, Electricity)
+
+aus_electricity %>% 
+  autoplot(Electricity) + 
+  labs(title = "Australian Electricity Production") + 
+  geom_smooth(method = lm, se = FALSE)
+```
+
+```{r}
+aus_electricity %>% 
+  gg_season(Electricity, labels = 'both') + 
+  labs(title = "Australian Electricity Production (By Time Of Year)")
+```
+
+Notice that the seasonality of the time series corresponds to how "parallel" the lines are in the plot. That is: going forward or backward by 1 year (4 quarters) does not really change the shape of the lines in the plot. Consequently, the correlation between $(Y_t)$ and $(Y_{t-4})$ will be very high:
+
+```{r, fig.width = 8, fig.height = 5}
+# plot the time series y_t against its lagged values y_{t-k};
+# we can use the gg_lag() function in the feasts package to do this
+aus_electricity %>% 
+  gg_lag(Electricity, geom = 'point')
+```
+
+The plot above is called a **lag plot** and shows the correlation between $(Y_t)$ with its lags $(Y_{t-k})$. There is a strong correlation between $(Y_t)$ and each of its lags, reflecting the strong upward trend in the time series data. Notice in particular that correlation is particularly strong for lags 4 and 8, which reflects the seasonal pattern by time of year (every 4 quarters).
+
+Lag plots are particularly useful when the data does not have a strong upward trend. Consider the Australian beer production data also found in the `aus_production` data set:
+
+```{r}
+aus_beer <- aus_production %>% 
+  filter(year(Quarter) >= 1990) %>% 
+  select(Quarter, Beer)
+
+aus_beer %>% 
+  autoplot(Beer) + 
+  labs(title = "Australian Beer Production")
+```
+
+We do see a cyclical pattern in the spikes and trophs, indicating the possibility of a seasonal pattern. We can investigate further by looking at the seasonal plot:
+
+```{r}
+aus_beer %>% 
+  gg_season(Beer, period = 'year') + 
+  labs(title = "Australian Beer Production (By Time Of Year)")
+```
+
+We do indeed see a very strong seasonal pattern, and we can corroborate this by looking at the lag plot:
+
+```{r, fig.width = 8, fig.height = 5}
+aus_beer %>% 
+  gg_lag(Beer, period = 'year', geom = 'point')
+```
+
+Notice in particular the very clean linear relationship at lag 4 and lag 8, indicating a strong seasonal pattern with a frequency of 4 quarters (i.e. yearly).
+
+# 5.2 Autocorrelation
+
+Lag plots highlight an important insight: if the correlations between $(Y_t)$ and the $(Y_{t-k}), (Y_{t-2k}), \ldots$ are particularly strong, then that is evidence for a seasonal pattern with frequency $k$. So the natural thing to do is to check the correlation coefficients of $(Y_t)$ with each of its lags.
+
+For a time series $(Y_t)$, the **$k$-th autocorrelation coefficient** $\rho(k)$ is the correlation between $(Y_t)$ and the lagged series $(Y_{t-k})$. Specifically:
+
+$$
+\rho(k) := cor(Y_t, Y_{t-k})
+$$
+
+The autocorrelation coefficient can be estimated from the sample data:
+
+$$
+r(k) := \frac{\sum_{t=k+1}^T(y_t - \overline{y})(y_{t-k} - \overline{y})}{\sum_{t=1}^T(y_t - \overline{y})^2}
+$$
+
+Notice our interesting choice of function notation: $\rho(k)$ and $r(k)$. This is because for each integer $k\geq 0$, the autocorrelation can be viewed as a function:
+$$
+k \mapsto \rho(k)
+$$
+
+We call this function the **autocorrelation function (ACF)**. The function $r(k)$ is an estimate of the function $\rho(k)$ and is computed by taking the correlation of the observed time series data $(y_k)$ with its lags $(y_{t-k})$ for each $k$:
+
+```{r}
+# compute the estimated ACF for Australian Beer Production
+# using the ACF() function in feasts
+aus_beer %>% 
+  ACF(Beer, lag_max = 14) %>% 
+  datatable()
+```
+
+# 5.3 ACF Plots
+
+Just like with the lag plots, notice that lags 4, 8, and 12 exhibit a particularly strong positive correlation, indicating a seasonal pattern with a frequency of 4 quarters. We can represent $r(k)$ visually using the **autocorrelation plot** ( aka a *correlogram* ):
+
+```{r}
+aus_beer %>% 
+  ACF(Beer, lag_max = 14) %>% 
+  autoplot() + 
+  labs(title = "ACF Plot (Australian Beer Production)")
+```
+
+The autocorrelation plot reveals that lags 2, 6, 10, and 14 have a particuarly strong negative correlation; this reflects the *shape* of the seasonal pattern: every troph corresponds to a peak 2 quarters later.
+
+# 5.4 ACF Plots Of Trended Data
+
+When the time series exhibits a strong trend, the correlation between $(Y_t)$ and immediate lags like $(Y_{t-1})$ will be very strong. For example, consider the Australian electricity production data which exhibited a very strong linear trend:
+
+```{r, warning=FALSE, message=FALSE}
+aus_electricity %>% 
+  autoplot(Electricity) + 
+  labs(title = "Australian Electricity Production") + 
+  geom_smooth(method = lm, se = FALSE)
+```
+
+The strong upward trend of the time series will cause the data to behave like a monotonic function: $Y_t > Y_{t-1}$ on average. This means that when $Y_{t-k}$ is large, then $Y_t$ will also likely be very large as well, leading to high correlation coefficients:
+
+```{r}
+aus_electricity %>% 
+  ACF(Electricity, lag_max = 30) %>% 
+  autoplot() + 
+  labs(title = "Australian Electricity Production (ACF Plot)")
+```
+
+The trended-ness of the data makes it very hard to detect seasonal patterns from the ACF plot. In other words: the trend is "drowning out" the signal from the seasonality. One way to resolve this issue is to *de-trend* the data by removing the trend.
+
+Recall from Section 3 that we can use a moving average window to estimate the trend of the time series:
+
+$$
+Tr_k(t) = \frac{1}{2k+1}\sum_{i = t-k}^{t+k}y_i
+$$
+
+```{r, warning=FALSE, message=FALSE}
+aus_electricity %>% 
+  mutate(
+    MA_trend = slider::slide_dbl(
+      Electricity,
+      mean,
+      .before = 5,
+      .after = 5,
+      .complete = TRUE
+    )
+  ) %>% 
+  as_tibble() %>% 
+  ggplot(aes(Quarter, Electricity)) + 
+  geom_line() + 
+  geom_line(aes(y = MA_trend), color = "blue") + 
+  labs(title = "Australian Electricity Production")
+```
+
+The moving average window uses future values $y_{t+1}$ to estimate the trend at time $t$, so it can't be used to forecast the trend for future times $t > T$. However, it *can* be used to estimate the trend of the observed values and remove it from the data!
+
+$$
+\tilde{y}_t := y_t - Tr_k(t)
+$$
+```{r, warning=FALSE, message=FALSE}
+aus_electricity %>% 
+  mutate(
+    MA_trend = slider::slide_dbl(
+      Electricity,
+      mean,
+      .before = 5,
+      .after = 5,
+      .complete = TRUE
+    ),
+    Electricity_detrended = Electricity - MA_trend
+  ) %>% 
+  autoplot(Electricity_detrended) + 
+  labs(title = "De-trended Australian Electricity Production")
+```
+
+The resulting time series is "de-trended", meaning that $Y_t \not\geq Y_{t-1}$ on average anymore! Consequently, this means a lot of the correlations in the ACF plot will get purged:
+
+```{r}
+aus_electricity %>% 
+  mutate(
+    MA_trend = slider::slide_dbl(
+      Electricity,
+      mean,
+      .before = 5,
+      .after = 5,
+      .complete = TRUE
+    ),
+    Electricity_detrended = Electricity - MA_trend
+  ) %>% 
+  ACF(Electricity_detrended, lag_max = 30) %>% 
+  autoplot() + 
+  labs(title = "De-trended Australian Electricity Production (ACF Plot)")
+```
+
+With the autocorrelation from the trend removed, we can see particularly strong correlations with lags that are multiples of 4, indicating a seasonal pattern with a frequency of 4 quarters.
+
+---
