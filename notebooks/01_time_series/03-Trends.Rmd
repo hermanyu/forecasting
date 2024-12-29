@@ -1,0 +1,400 @@
+---
+title: "03: Trends"
+author: "Herman Yu"
+output:
+  rmdformats::downcute
+---
+
+# Introduction
+
+Given a time series process $(Y_t)$, we wish to determine the joint distribution $F_Y((Y_t)_{t\in \mathbb{Z}})$. Unfortunately, we will only ever get to observe a  finite sample $y_1, y_2,\ldots, y_T$, so the joint distribution $F_Y$ cannot be determined directly. So instead, we try to detect various *features* of the joint distribution $F_Y$ by looking to the sample data for evidence of these features. One such feature is the *trend* of a time series, which is the "general" behavior of the expected values $E[Y_t]$ across time.
+
+# 3.1 Trends
+
+The first major feature of a time series process is its *trend*. Formally, let $(Y_t)$ be a time series process. We say $(Y_t)$ has an **upward trend** if the *limit inferior* of the expected value increases to infinity:
+
+$$
+\lim_{t\to \infty}\left(\inf_{s > t}E[Y_s]\right) = \infty
+$$
+
+Intuitively, this just says that the time series is "generally" going up over time.
+
+```{r, warning=FALSE, message=FALSE}
+options(scipen = 999)
+library(dplyr)
+library(ggplot2)
+library(DT)
+
+# make some synthetic time series data
+t <- seq(1, 100, by = 1)
+y <- t/10 + sin(t/2)
+inferior <- c()
+
+# for each t, compute the inf(s>t) E[Y_s]
+for (time in t){
+  inferior <- c(inferior, min(y[time:length(y)]))
+}
+
+data <- tibble(
+  time = t,
+  y = y,
+  lim_inf = inferior
+)
+
+data %>% 
+  ggplot(aes(time, y)) + 
+  geom_point() + 
+  geom_line(aes(y = lim_inf), color = "red")
+```
+
+Similarly, we say $(Y_t)$ has a **downward trend** if the *limit superior* of the expected value decreases to negative infinity:
+
+$$
+\lim_{t\to \infty}\left(\sup_{s > t} E[Y_s]\right) = -\infty
+$$
+
+Intuitively, this just says the time series is "generally" moving down across time.
+
+```{r}
+t <- seq(1, 100, by = 1)
+y <- -t/10 + sin(t/2)
+superior <- c()
+
+for (time in t){
+  superior <- c(superior, max(y[time:length(y)]))
+}
+
+data <- tibble(
+  time = t,
+  y = y,
+  lim_sup = superior
+)
+
+data %>% 
+  ggplot(aes(time, y)) + 
+  geom_point() + 
+  geom_line(aes(y = lim_sup), color = "blue")
+```
+
+<br>
+
+Note that a time series need not have any trend:
+
+```{r}
+t <- seq(1, 100, by = 1)
+y <- 5 + sin(t/2)
+inferior <- c()
+superior <- c()
+
+for (time in t){
+  inferior <- c(inferior, min(y[time:length(y)]))
+}
+
+for (time in t){
+  superior <- c(superior, max(y[time:length(y)]))
+}
+
+data <- tibble(
+  time = t,
+  y = y,
+  lim_inf = inferior,
+  lim_sup = superior
+)
+
+data %>% 
+  ggplot(aes(time, y)) + 
+  geom_point() + 
+  geom_line(aes(y = lim_inf), color = "red") + 
+  geom_line(aes(y = lim_sup), color = "blue") + 
+  scale_y_continuous(limits = c(0, 10))
+```
+
+# 3.2 Detecting Trends
+
+## Plotting
+
+The easiest way to detect a trend is by plotting the data. For example, the `aus_production` data set provided in the `fpp3` library shows the production of various consumer goods in Australia across time. If we plot the `Electricity` variable as a function of time, we get:
+
+```{r, warning = FALSE, message = FALSE}
+library(fpp3)
+
+aus_electricity <- aus_production %>% 
+  select(Quarter, Electricity)
+
+aus_electricity %>% 
+  autoplot(Electricity)
+```
+
+The time series plot clearly shows an upward trend in the data. This isn't too surprising considering the Australian population has been steadily increasing from 1960 to 2011, so electricity demand (and hence supply) will naturally also increase.
+
+# 3.3 Quantifying Linear Trends
+
+## First Differences
+We can quantify the nature of the trend by quantifying the fluctations in the data. Trends are features reflecting the increasing (or decreasing) nature of a time series. Calculus tells us that a function is increasing (resp. decreasing) if its derivative is positive (resp. negative). This inspires us to consider the **first difference** of a time series:
+
+$$
+\Delta^1(t) = Y_{t+1} - Y_t
+$$
+
+We can estimate the first difference from the observed sample:
+
+$$
+\delta^1(t) = y_{t+1} - y_t
+$$
+
+```{r, warning=FALSE}
+aus_electricity %>% 
+  mutate(
+    first_difference = lead(Electricity, n = 1) - Electricity
+  ) %>% 
+  autoplot(
+    first_difference
+  )
+```
+
+The first difference of the data oscillates between positive and negative, which reflects the natural small scale fluctuations in the data. Since we are interested in the "overall" direction of the time series, it makes sense to take an average of the first differences:
+
+```{r}
+aus_electricity %>% 
+  as_tibble() %>% 
+  summarise(
+    `First Difference (Mean)` = mean(lead(Electricity, n = 1) - Electricity, na.rm = TRUE)
+  ) %>% 
+  datatable()
+```
+
+So on average, we expect an increase of 249 units of electricity with each step in time.
+
+## Correlation With Time
+
+Another approach to quantifying the trend is to simply estimate the correlation of $Y_t$ with the time index $t$:
+
+```{r}
+cor.test(
+  aus_electricity$Electricity,
+  seq(1, length(aus_electricity$Electricity))
+)
+```
+
+Australian electricity production is nearly perfectly correlated with time with p-value of near 0. This reflects the very obvious upward trend we saw in the time series plot. In particular, the high pearson correlation indicates a very strong linear relationship between the response variable `Electricity` and time.
+
+## Regressing On Time
+
+We can take the previous approach one step further and regress the time series on the time index $t$. The plot for Australian electricity production shows an upward trend that is approximately linear and this is corroborated by the Pearson correlation coefficient, so we can try a simple linear regression to quantify the trend:
+
+```{r}
+aus_electricity_trend <- lm(
+  Electricity ~ t,
+  data = aus_electricity %>% mutate(t = row_number())
+)
+
+summary(aus_electricity_trend)
+```
+
+The regression shows that Australian electricity production, on average, goes up by 279 units for each step in time.
+
+# 3.4 Non-linear Trends
+
+Time series trends will often times not be linear. For example, consider Google's daily closing stock price from 2010 to 2018:
+
+```{r, warning=FALSE, message=FALSE}
+library(tidyquant)
+
+# returns an "xts" and "zoo" object containing the
+# various stock price info for Google.
+goog <- getSymbols(
+  "GOOG", 
+  from = "2010-01-01", 
+  to = "2023-12-31", 
+  auto.assign=FALSE # set to FALSE so object is returned instead of loaded as global variable
+)
+
+# convert zoo object to tsibble
+goog <- as_tsibble(
+  fortify.zoo(goog), # fortify.zoo() coerces zoo object into dataframe
+  index = Index
+)
+
+goog %>% 
+  autoplot(
+    GOOG.Close
+  )
+```
+
+We see a clear upward trend in the data, but a straight line won't fit the data as nicely as we would hope. In particular, we see a bit of concavity in the trend, so the time series will likely diverge from a linear trend as we move further into the future. To illustrate this problem, let's attempt to fit a linear trend on the data from 2010 to 2018:
+
+```{r}
+goog_2018_trend <- lm(
+  GOOG.Close ~ t,
+  data = goog %>% 
+    filter(
+      Index <= '2018-12-31'
+    ) %>% 
+    mutate(
+      t = row_number()
+    )
+)
+
+summary(goog_2018_trend)
+```
+
+Forcing a linear trend onto the data, we get an average increase of $0.02 in Google's daily closing price from 2010 to 2018. Unfortunately, this linear trend will do a poor job at modeling future data from 2019 to 2023:
+
+```{r}
+goog %>% 
+  as_tibble() %>% 
+  mutate(
+    t = row_number(),
+    trend = 0.020836 * t + 5.5661967
+  ) %>% 
+  ggplot(aes(Index, GOOG.Close)) + 
+  geom_line() + 
+  geom_line(aes(y = trend), color = "blue")
+```
+
+
+## Log Transforms
+
+If we suspect that the true trend is exponential, we can log-transform the data to recover a linear trend:
+
+```{r}
+goog %>% 
+  filter(Index <= '2018-12-31') %>% 
+  mutate(
+    log_price = log(GOOG.Close)
+  ) %>% 
+  autoplot(log_price)
+```
+
+The trend for the log-price does appear linear now, so we can fit a linear trend to this transformed time series:
+
+```{r}
+goog_2018_log_trend <- lm(
+  log_price ~ t,
+  data = goog %>% 
+    filter(
+      Index <= '2018-12-31'
+    ) %>% 
+    mutate(
+      t = row_number(),
+      log_price = log(GOOG.Close)
+    )
+)
+
+summary(goog_2018_log_trend)
+```
+
+We can recover the exponential trend for the original time series by exponentiating the trend on the log-data:
+
+$$
+Log(Tr(t)) = \beta_0 + \beta_1t\\
+Tr(t) = e^{\beta_0}(e^t)^{\beta_1}
+$$
+
+```{r}
+goog %>% 
+  as_tibble() %>% 
+  mutate(
+    t = row_number(),
+    trend = exp(2.411) * (exp(0.000743447 * t))
+  ) %>% 
+  ggplot(aes(Index, GOOG.Close)) + 
+  geom_line() + 
+  geom_line(aes(y = trend), color = "blue")
+```
+ 
+We see that this exponential trend is a much better estimate for the future 2019-2023 data.
+
+## Polynomial Trends
+
+An alternative approach is to model the trend using a polynomial function of time. In the Google stock price example, we observed some concavity in the trend, so it might be reasonable to model the trend as a quadratic polynomial of time:
+
+```{r}
+model_2018_quad_trend <- lm(
+  GOOG.Close ~ t + t_sq,
+  data = goog %>% 
+    filter(
+      Index <= '2018-12-31'
+    ) %>% 
+    mutate(
+      t = row_number(),
+      t_sq = t^2
+    )
+)
+
+summary(model_2018_quad_trend)
+```
+
+```{r}
+goog %>% 
+  as_tibble() %>% 
+  mutate(
+    t = row_number(),
+    trend = 12.4956591848 + (0.0024904817*t) + (0.0000081007 * t^2)
+  ) %>% 
+  ggplot(aes(Index, GOOG.Close)) + 
+  geom_line() + 
+  geom_line(aes(y = trend), color = "blue")
+```
+
+## Moving Averages
+
+All of the previous examples requires assuming a parametric functional form for the trend $Tr(t)$, then estimating the parameters to recover an explicit functional form. This raises an issue: what if we don't have a good idea for what the functional form should be? An alternative approach would be to use a *non-parametric* model such as $k$-nearest neighbors. This motivates the *moving average window* method.
+
+For a time series $(Y_t)$, the **moving average window** of length $2k+1$ is defined as:
+
+$$
+Tr_k(t) = \frac{Y_{t-k} + \ldots + Y_t + \ldots + Y_{t+k}}{2k+1} = \frac{1}{2k+1}\sum_{i=t-k}^{t+k}Y_i
+$$
+
+Defining $Tr_k(t)$ this way, we get the following estimate of the trend for Google's daily closing stock price:
+
+```{r, warning=FALSE}
+goog %>% 
+  mutate(
+    # use the slide_dbl() function in the 
+    # slider package to compute a moving average window
+    # of length 121
+    MA_window = slider::slide_dbl(
+      GOOG.Close, # time series to compute on
+      mean,        # function to use
+      .before = 60,
+      .after = 60,
+      .complete = TRUE
+    )
+  ) %>% 
+  autoplot(MA_window)
+```
+
+Note that the hyperparameter $k$ determines the size of the window; larger $k$ results in a smoother trend while smaller $k$ results in more variation. This leads to a bias-variance tradeoff where the choice of $k$ will depend on the actual signal we are trying to capture. In the Google stock price example, we used $k=60$ and we were able to capture 3 major patterns corresponding to actual macroeconomic events:
+
+1) A steady increase in Google's stock price from 2010 top 2020. This corresponds to the general growth of the US economy from the low interest rates following the Great Recession.
+
+2) An explosion in Google's stock price from 2020 to 2022. This corresponds to the boom in consumer spending following the COVID stimulus checks.
+
+3) A dramatic decrease in Google's stock price throughout 2023. This corresponds to the high interest rates set by the US Federal Reserve to combat inflation in the United States.
+
+We could choose to crank up the parameter $k$ to get an even smoother trend (decreasing the variance), but we risk losing the ability to capture important patterns (increasing the bias). For example, with $k = 200$, we get:
+
+```{r, warning=FALSE}
+goog %>% 
+  mutate(
+    # use the slide_dbl() function in the 
+    # slider package to compute a moving average window
+    # of length 121
+    MA_window = slider::slide_dbl(
+      GOOG.Close, # time series to compute on
+      mean,        # function to use
+      .before = 200,
+      .after = 200,
+      .complete = TRUE
+    )
+  ) %>% 
+  autoplot(MA_window)
+```
+
+Note further that the moving average window is *backwards looking*: future data $y_{t+1}$ is used to estimate the present value at time $t$. This means that the moving average window cannot technically be used to forecast into future dates (since we don't have the data points necessary to compute the moving average window yet).
+
+Nonetheless, the moving average window approach is useful for disentangling the *historical* trend from other patterns in the time series data. Even though the moving average window can't be used to forecast future data, the hope factoring out the trend will yield patterns which *can* be used in the forecast (see section 5.4 ACF Plots Of Trended Data for more details).
+
+---

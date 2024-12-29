@@ -7,26 +7,38 @@ output:
 
 # Introduction
 
-*Forecasting* is process of predicting future values of a *time-series* object. In order to understand forecasting methods, we must first endeavor to understand the underlying time-series objects of study. This section will introduce the concept of time-series objects and their properties which are most useful.
+*Forecasting* is process of predicting future values of a *time series* object. In order to understand forecasting methods, we must first endeavor to understand the underlying time series objects of study. This section will introduce the concept of time series objects and their properties which are most useful.
 
 
 ---
 
 # 1.1 Time Series Data
 
-A **time-series** is a sequence of random variables $(Y_t)_{t\in\mathbb{R}}$ indexed by a time parameter $t$. The time-series is *discrete* if the sequence is indexed by a discrete set. We will mainly focus on discrete time-series and write $\ldots, Y_{t-1}, Y_t, Y_{t+1}, \ldots$ to indicate the natural ordering of the indexes.
+A **time series process** is a sequence of random variables $(Y_t)_{t\in\mathbb{R}}$ indexed by a time parameter $t$. The time series is *discrete* if the sequence is indexed by a discrete set. We will mainly focus on discrete time series and write $\ldots, Y_{t-1}, Y_t, Y_{t+1}, \ldots$ to indicate the natural ordering of the indexes.
 
-A **time-series sample** is an observed realization of the time-series: $y_0, y_1, \ldots, y_T$. Notice that the true data generation process $(Y_t)$ can stretch infinitely into the past and future, but an observed data sample must start and end at some point in time. This presents the first major challenge to time-series analysis and forecasting: how do we extrapolate properties of the infinite process $(Y_t)$ from a finite sample of observed values $(y_t)$?
+A **time series data set** is an observed realization of a time series process: $y_0, y_1, \ldots, y_T$. Notice that the true data generation process $(Y_t)$ can stretch infinitely into the past and future, but an observed data sample must start and end at some point in time. This presents the first major challenge to time series analysis and forecasting: how do we extrapolate properties of the infinite process $(Y_t)$ from a finite sample of observed values $(y_t)$?
 
-**Forecasting** is the process of predicting a future value $y_t$ for some $t>T$ using information known at time $T$. Since the underlying process $Y_t$ is a random variable, we cannot hope to predict $y_t$ exactly. The next best alternative is to provide a point estimate for $y_t$ equipped with a *prediction interval* $(y - \delta, y + \delta)$. How we derive these point estimates and prediction intervals is the central question of interest in forecasting.
+**Forecasting** is the process of predicting a future value $y_t$ for some $t>T$ using information known at time $T$. Since the underlying process $Y_t$ is a random variable, we cannot hope to predict $y_t$ exactly. The next best alternative is to provide a point estimate for $y_t$ equipped with a *prediction interval* $(y - \delta, y + \delta)$. Formally, let $I(T)$ denote all the information known at time $T$. A **forecast** for time $t > T$ is a triple of functions function $(f_L, f, f_U$ such that:
+
+$$
+E[Y_t | I(T) ] \approx f(T)
+$$
+
+and that:
+
+$$
+Pr(\,\,f_L(T) < y_t < f_U(t)\,\,) \geq 1-\alpha
+$$
+
+for some $\alpha \in (0, 1)$. We call the interval $(f_L(T), f_U(T))$ the **$(1-\alpha)$% prediction interval**.
 
 ## The Trivial Case
 
-If the $(Y_t)$ are i.i.d, then $Y_t = Y$ for all $t$ and the study of the time-series $(Y_t)$ reduces to the study $Y$. In this case, the time-series sample $y_0,\ldots, y_T$ can be pooled into a sample from a single distribution $Y$. Classical statistics can then be used to analyze the data: sample means, sample variance, $t$-distributions, etc.
+If the $(Y_t)$ are i.i.d, then $Y_t = Y$ for all $t$ and the study of the time series $(Y_t)$ reduces to the study $Y$. In this case, the time series sample $y_0,\ldots, y_T$ can be pooled into a sample from a single distribution $Y$. Classical statistics can then be used to analyze the data: sample means, sample variance, $t$-distributions, etc.
 
 ## The Non-Trivial Case
 
-The issue is that real-word time-series processes $(Y_t)$ are *almost never* i.i.d. For example: price of a stock $Y_t$ at time $t$ will generally be very close to the price $Y_{t-1}$ at time $t-1$; this property is called *autocorrelation* and violates the independence assumption needed to do traditional statistics. Another example: the Gross Domestic Product (GDP) of the United States has risen steadily over the last 100 years; this property is called a *trend* and implies that the expected value for the time-series is different at various points in time (hence the distributions are not identical). Time series analysis aims to develop the theory and machinery necessary to answer questions about statistical inference in the face of autocorrelated and/or trended data. 
+The issue is that real-word time series processes $(Y_t)$ are *almost never* i.i.d. For example: price of a stock $Y_t$ at time $t$ will generally be very close to the price $Y_{t-1}$ at time $t-1$; this property is called *autocorrelation* and violates the independence assumption needed to do traditional statistics. Another example: the Gross Domestic Product (GDP) of the United States has risen steadily over the last 100 years; this property is called a *trend* and implies that the expected value for the time series is different at various points in time (hence the distributions are not identical). Time series analysis aims to develop the theory and machinery necessary to answer questions about statistical inference in the face of autocorrelated and/or trended data. 
 
 # 1.2 Trended Data And Autocorrelation
 
@@ -49,7 +61,7 @@ $$
 Y_t = Tr(t) + S(t) + \epsilon_t
 $$
 
-where the time series $Y_t$ is decomposed into a *trend* component $Tr(t)$, a seasonality component $S(t)$, and an error term $\epsilon_t$. Unlike traditional regression analysis, the error terms $\epsilon_t$ in time-series analysis are not assumed to be independent and are allowed to be autocorrelated. Since the error terms are no longer i.i.d, the next best alternative is to hope for a property called *stationarity*:
+where the time series $Y_t$ is decomposed into a *trend* component $Tr(t)$, a seasonality component $S(t)$, and an error term $\epsilon_t$. Unlike traditional regression analysis, the error terms $\epsilon_t$ in time series analysis are not assumed to be independent and are allowed to be autocorrelated. Since the error terms are no longer i.i.d, the next best alternative is to hope for a property called *stationarity*:
 
 $$
 F_Y(Y_{t_1},\ldots,Y_{t_n}) = F_Y(Y_{t_1 + \tau}, \ldots, Y_{t_n + \tau}) \qquad \forall \tau,t_1,\ldots,t_n \in \mathbb{R}
@@ -186,7 +198,6 @@ within_interval_count / validation_set_size
 ```
 
 Indeed, we see that 90% of the time, the value of $y_{t+1}$ will fall within the prediction interval.
-
 
 ---
 
