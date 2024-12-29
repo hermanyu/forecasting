@@ -1,0 +1,588 @@
+---
+title: "06: Time Series Decomposition"
+author: "Herman Yu"
+output:
+  rmdformats::downcute
+---
+
+# Introduction
+
+After discussing the concepts of trend and seasonality, a natural course of action is to compose the two ideas into a single model for time series data. The **time series decomposition** model stipulates that a time series process $(Y_t)$ can be decomposed into 3 pieces: a trend $Tr(t)$, a seasonal component $S(t)$, and a remainder error component $\epsilon(t)$. The model is fitted one piece at a time: first $Tr(t)$ is estimated, then $S(t)$, and finally $\epsilon(t)$. 
+
+Different methods for estimating $Tr(t)$ and $S(t)$ lead to different kinds of time series decomposition models. The *classical decomposition* fits $Tr(t)$ using a moving average window. The *STL decomposition* fits $Tr(t)$ using a local regression. Facebook's *Prophet* model is uses a piecewise linear (or possibly logistic) trend. The seasonal component of Prophet is modeled by fitting a (finite) Fourier series via OLS.
+
+# 6.1 Time Series Components
+
+The **time series decomposition model** is a model for a time series process $(Y_t)$ of the form:
+
+$$
+Y_t = Tr(t) + S(t) + \epsilon
+$$
+
+where:
+
+1) $Tr(t)$ is a non-periodic function of time called the **trend**.
+2) $S(t)$ is a periodic function with period $p$ called the **seasonality** with $\frac{1}{p}\int_0^pS(t)\,\,dt = 0$. That is, we stipulate that $S(t)$ has an average value of 0 over a single cycle.
+  * This assumption is reasonable, since non-zero average $S(t)$ can be shifted down by adjusting the trend component accordingly.
+3) and $\epsilon$ is a random variable with mean 0 called the **remainder**. 
+
+If the trend $Tr(t)$ is roughly monontonic, then for $u < t$: $Y_u$ large implies $Y_t$ is likely to be large. This means that the autocorrelation of $(Y_t)$ will be high. 
+  * This suggests that $S(t)$ should be a periodic function with period $p = 12$ months.
+
+# 6.2 The Classical Decomposition
+
+## The Trend Component
+
+The **classical decomposition** is a time series decomposition model which estimates $Tr(t)$ using a moving average window whose size is based on the period $p$ of the seasonal component. To understand the the theory, we start by understanding the data generation process. If $(y_t)$ represents the observed values of the time series, then:
+
+$$
+y_t &= Tr(t) + S(t) + e_t
+$$
+We emphasize here that $Tr(t)$ and $S(t)$ are *deterministic* and only the remainder $e_t$ is a randomly sampled value from the distribution of $\epsilon$. The trend $Tr(t)$ is modeled using two different estimates, based on the parity of the period $p$:
+
+1) If $p$ is odd, then model $Tr(t)$ using a $p$-moving average window on $y_t$.
+2) If $p$ is even, then model $Tr(t)$ using a $2$-moving average window applied to the $p$-moving average window.
+
+### Odd $p$ 
+
+Fix a positive integer $k$ and consider a moving average window of size $k$:
+
+$$
+\hat{Tr}(t) := \frac{1}{2k+1}\sum_{i=-k}^ky_{t+i}
+$$
+
+We thus have:
+
+$$
+\begin{align*}
+\hat{Tr}(t) &= \frac{1}{2k+1}\sum_{i=-k}^ky_{t+i}\\
+&= \frac{1}{2k+1}\sum_{i=-k}^k Tr(t+i) + \frac{1}{2k+1}\sum_{i=-k}^k  S(t+i) + \frac{1}{2k+1}\sum_{i=-k}^k  e_{t+i}\\
+&\approx \frac{1}{2k+1}\sum_{i=-k}^k Tr(t+i) + \frac{1}{2k+1}\sum_{i=-k}^k  S(t+i)\\
+\end{align*}
+$$
+
+where we are using the fact that the quantity $\frac{1}{2k}\sum_{i=-k}^ke_{t+k}$ is a sample mean and hence is an estimate for $E[\epsilon] = 0$.
+
+If $p$ is odd, we can make a strategic choice of $k = \frac{p-1}{2}$ to get:
+
+$$
+\begin{align*}
+\hat{Tr}(t) &\approx \frac{1}{p}\sum_{i=-\frac{p-1}{2}}^{\frac{p-1}{2}} Tr(t+i) + \frac{1}{p}\sum_{i=-\frac{p-1}{2}}^{\frac{p-1}{2}}  S(t+i)\\
+&= \frac{1}{p}\sum_{i=-\frac{p-1}{2}}^{\frac{p-1}{2}} Tr(t+i) + C\\
+&= \frac{1}{p}\sum_{i=-\frac{p-1}{2}}^{\frac{p-1}{2}} Tr(t+i)
+\end{align*}
+$$
+
+where we are using the fact that $S(t)$ is periodic with period $p$, so the sum $\sum S(t+i)$ is constant $C$ for all $t$. Since the average value $\frac{1}{p}\int_0^p S(t)$ is assumed 0 for all, the constant $C$ must be 0. 
+
+Finally, note that for a linear function $f(x) = a+bx$, the average value of $f$ on the interval $[t-(p/2), t+(p/2)]$ is just $f(t)$:
+
+$$
+\begin{align*}
+\frac{1}{p}\int_{t-\frac{p}{2}}^{t+\frac{p}{2}} f(x) \,\,dx &= \frac{1}{p}\int_{t-\frac{p}{2}}^{t+\frac{p}{2}} a+bx \,\,dx\\
+&= \frac{1}{p} \left[ ax +\frac{b}{2}x^2 \right]_{t-\frac{p}{2}}^{t+\frac{p}{2}}\\
+&= \frac{1}{p} \left[ a\left(t + \frac{p}{2} \right) - a\left(t - \frac{p}{2} \right)
+   + \frac{b}{2} \left( t + \frac{p}{2} \right)^2 - \frac{b}{2}\left( t - \frac{p}{2} \right)^2\right]\\
+&= \frac{1}{p} \left[ ap +  \frac{b}{2}\left( t^2 + pt +\frac{p^2}{4} - t^2 + pt - \frac{p^2}{4} \right) \right]\\
+&= \frac{1}{p} \left[ ap + \frac{b}{2}(2pt) \right]\\
+&= a + bt\\
+&= f(t)
+\end{align*}
+$$
+
+Therefore, if $Tr(t)$ is a sufficiently smooth, i.e. nearly linear on a neighborhood around $t$, then we get:
+
+$$
+\begin{align*}
+\hat{Tr}(t) &= \frac{1}{p}\sum_{i=-\frac{p-1}{2}}^{\frac{p-1}{2}} y_{t+i}\\
+&\approx \frac{1}{p}\sum_{i=-\frac{p-1}{2}}^{\frac{p-1}{2}} Tr(t+i)\\
+&\approx Tr(t)
+\end{align*}
+$$
+
+### Even $p$
+
+If the period $p$ is even, then we can no longer center a window of size $p$ on a given time point $t$. In particular, there are now two possible choices of windows:
+
+$$
+\hat{Tr}_L(t) := \frac{1}{p}\sum_{i=-\frac{p}{2}+1}^{\frac{p}{2}}y_{t+i}\\
+\hat{Tr}_R(t) := \frac{1}{p}\sum_{i=-\frac{p}{2}}^{\frac{p}{2}-1}y_{t+i}\\
+$$
+
+For example, when $p=4$, we get:
+
+$$
+\hat{Tr}_L(t) := \frac{y_{t-1} + y_t + y_{t+1} + y_{t+2}}{4}\\
+\hat{Tr}_R(t) := \frac{y_{t-2} + y_{t-1} + y_t + y_{t+1}}{4}\\
+$$
+
+The natural thing to do is take to take the average of both of these estimates:
+
+$$
+\begin{align*}
+\hat{Tr}(t) &= \frac{1}{2}\hat{Tr}_L(t) + \frac{1}{2}\hat{Tr}_R(t)\\
+&= \frac{1}{2}\left[ \frac{1}{p}\sum_{i=-\frac{p}{2}+1}^{\frac{p}{2}}y_{t+i} + \frac{1}{p}\sum_{i=-\frac{p}{2}}^{\frac{p}{2}-1}y_{t+i}\right] \\
+&= \frac{1}{2p}y_{t - p/2} + \frac{1}{p}y_{t- p/2 + 1} + \ldots + \frac{1}{p}y_{t+p/2-1} + \frac{1}{2p}y_{t+p/2}
+\end{align*}
+$$
+
+We call this a $2\times p$-moving average window, since this amounts to first taking a moving average of a moving average.
+
+## Seasonal Component
+
+To estimate the seasonal component, we can *de-trend* the time series by taking the difference:
+
+$$
+Y_t - Tr(t) = S(t) + \epsilon
+$$
+
+Since we have an estimate $\hat{Tr}(t)$ for the trend, we thus have:
+
+$$
+Y_t - \hat{Tr}(t) \approx S(t) + \epsilon
+$$
+
+In particular, since $S(t)$ is deterministic and $\epsilon$ has mean 0, we get:
+
+$$
+E[Y_t - \hat{Tr}(t)] \approx S(t)
+$$
+
+So we should be able to estimate $S(t)$ at teach time $t$ by taking a sample mean of the form of $y_t - \hat{Tr}(t)$. The issue though is that we only have 1 observation $y_t$ for each $t$. The key insight is that $S(t)$ is periodic with period $p$, so:
+
+$$
+\begin{align*}
+Y_{t+kp} - Tr(t+kp) &= S(t +kp) + \epsilon \\
+&= S(t) + \epsilon \\
+&= Y_{t} - Tr(t)
+\end{align*}
+$$
+
+In other words, for each integer $k=0, \ldots, p-1$, the set of observations:
+
+$$
+S_k := \{ y_t \,\,|\,\, t \text{ mod } p = k \}
+$$
+
+forms a single sample drawn from a single underlying distribution $S(t \text{ mod } p) + \epsilon$. This motivates the following approach where we just group together all the $y_t$ by seasonal period and take the sample average:
+
+$$
+\tilde{S}(k) := \frac{1}{|S_k|} \sum_{t \text{ mod } p = k} y_t
+$$
+
+We thus define an estimate for $S(t)$ as:
+
+$$
+\hat{S}(t) := \tilde{S}(t \text{ mod } p)
+$$
+
+## Remainder Term
+
+Finally, the remainder term is then just estimated by:
+
+$$
+\hat{e}_t = y_t - \hat{Tr}(t) - \hat{S}(t)
+$$
+
+## Example: US Retail Employment
+
+Consider the US Retail Employment data, contained in the `us_employment` data set
+
+```{r, warning=FALSE, message=FALSE}
+options(scipen=999)
+library(fpp3)
+
+us_retail_employment <- us_employment %>% 
+  filter(
+    year(Month) >= 1990,
+    Title == "Retail Trade"
+  ) %>% 
+  select(-Series_ID)
+
+autoplot(us_retail_employment) + 
+  labs(title = "US Retail Employment")
+```
+
+```{r}
+us_retail_employment %>% 
+  gg_season(Employed, period = 'year') + 
+  labs(title = "US Retail Employment", x = "Time Of Year")
+```
+
+
+The graph of the data suggests the following model:
+
+1) The trend $Tr(t)$ increases from 1990 to 2000, then stagnates from 2000 to 2007, decreases from 2007 to 210, and finally increases again from 2010 to 2020.
+2) The seasonal component dips from January to February, then steadily increases throughout the year. Around October, we see a sharp increase in retail employment corresponding to increase shopping for the holiday season.
+
+We thus suspect that a classical time series decomposition might be an appropriate model. Based on the seasonal plot, it seems reasonable to assume a periodicity of $p=12$ months. We start by estimating the trend component; since $p=12$ is even, we use a $2\times 12$-moving average window:
+
+```{r, warning=FALSE, message=FALSE}
+period <- 12
+
+data <- us_retail_employment %>% 
+  mutate(
+    tr_left = slider::slide_dbl(
+      .x = Employed,
+      .f = mean,
+      .before = (period/2) - 1,
+      .after = (period/2),
+      .complete = TRUE
+    ),
+    trend = slider::slide_dbl(
+      .x = tr_left,
+      .f = mean,
+      .before = 1,
+      .after = 0,
+      .complete = TRUE
+    )
+  )
+
+data %>% 
+  as_tibble() %>% 
+  ggplot(aes(Month)) + 
+  geom_line(aes(y = Employed)) + 
+  geom_line(aes(y = trend), color = "blue") + 
+  labs(title="US Retail Employment Trend")
+```
+
+Next we estimate the seasonal component by de-trending the time series, then averaging by the seasonal period (i.e. the month of the year):
+
+```{r, warning=FALSE, message=FALSE}
+data <- data %>% 
+  mutate(
+    detrended = Employed - trend,
+    seasonal_period = month(Month)
+  ) %>% 
+  group_by(seasonal_period) %>% 
+  mutate(
+    seasonality = mean(detrended, na.rm = TRUE)
+  ) %>% 
+  ungroup()
+  
+
+data %>% 
+  autoplot(detrended) + 
+  labs(title = "De-Trended US Retail Employment")
+```
+
+Notice that de-trending the series makes the seasonality much clearer.
+
+```{r}
+data %>% 
+  as_tibble() %>% 
+  ggplot(aes(seasonal_period, seasonality)) + 
+  geom_line()+
+  labs(title = "Seasonality Of US Retail Employment")
+```
+
+Finally, the remainder term is computed by simply subtracting the trend and seasonality from the original data:
+
+```{r, warning = FALSE, message=FALSE}
+data <- data %>% 
+  mutate(
+    remainder = Employed - trend - seasonality
+  )
+
+data %>% 
+  as_tibble() %>% 
+  select(
+    Month,
+    Employed,
+    trend,
+    seasonality,
+    remainder
+  ) %>% 
+  pivot_longer(
+    cols = c(Employed, trend, seasonality, remainder),
+    names_to = "component"
+  ) %>% 
+  ggplot(aes(Month, value)) + 
+  geom_line() + 
+  facet_wrap("component", ncol=1, scales = "free_y")
+```
+
+The process is simple to implement in code, but rather tedious. Thankfully, the `stats` package in base R comes with a `decompose()` function that performs the decomposition for us automatically, but it requires us to first package the data into a `ts` object:
+
+```{r}
+# extract the US Retail Employment data
+# into a 'ts' object
+retail_employment_ts <- ts(
+  us_retail_employment$Employed,
+  frequency = 12
+)
+
+# Perform a classical decomposition using the decompose() function.
+# The function returns a named list of vectors containing:
+#   $x : the original data
+#   $seasonal : the seasonality
+#   $trend : the trend
+#   $random : the remainder
+decompose(
+  retail_employment_ts,
+  type = "additive"
+) %>% 
+  plot()
+```
+
+We can also use the `fabletools` and `feasts` packages to model off of `tsibble()` objects instead.
+
+```{r}
+# The model() function from fabletools is a wrapper
+# which fits a specified model on training data.
+# It returns a 'mable' object (short for "modeling table")
+# containing relevant model outputs like the trend and seasonality.
+#
+# To specify a classical decomposition model, we use the classical_decomposition()
+# function from the feasts package. This function returns
+# a "model definition" object contains the relevant metadata for how to structure
+# the time series decomposition
+retail_employment_decomp <- model(
+  .data = data,
+  classical_decomposition(Employed, type = "additive")
+)
+
+# the components() function extracts 
+# the original data, trend, seasonality, and remainder
+# into a tsibble object
+components(retail_employment_decomp) %>% 
+  head(20) %>% 
+  DT::datatable()
+```
+
+```{r}
+# plot of the components
+components(retail_employment_decomp) %>% 
+  autoplot()
+```
+
+
+## Drawbacks
+
+* Estimating the trend component at time $t$ requires data from future times $t+1$, $t+2$, etc. Consequently the model is unable to forecast future values.
+* The model assumes a sufficiently smooth trend component. This means the model is unable to handle one-off economic shocks that might "jolt" the trend component at a specific point in time.
+* The model assumes that seasonality does not change in the long run. This can be problematic when modeling time series data whose seasonal behavior changes over time.
+
+# 6.3 The STL Decomposition
+
+The **seasonal-trend decomposition with LOESS (STL)** is a time series decomposition model which estimates trend $Tr(t)$ and seasonality $S(t)$ components using a local regression technique called **loess**. Before diving into the theory, we begin by demonstrating the results we would get from an STL model to allow for comparison against the classical decomposition:
+
+```{r}
+retail_employment_stl <- model(
+  .data = us_retail_employment,
+  STL(
+    Employed ~ trend(window = 7) + season(window = "periodic"),
+    robust = TRUE
+  )
+)
+
+retail_employment_stl %>% 
+  components() %>% 
+  autoplot()
+```
+
+The hyperparameters of this model are the `trend(window = ...)` and `season(window = ...)` parameters. These dictate the size of the "window" aka neighborhood used in the local regression. Larger windows will use a larger neighborhood of points, resulting in smoother estimates at the cost of potentially underfitting. Smaller windows will result in less smooth estimates which can potentially capture rapid changes in the data.
+
+The STL algorithm consistes of an **inner loop** and **outer loop**. The inner loop proceedsd as follows: start by initializing the trend $\hat{Tr}(t) = 0$.
+
+1) Compute the detrended time series $\tilde{y}_t := y_t - \hat{Tr}(t)$.
+
+2) For each seasonal period $k=1,\ldots,p$, define the **cycle-subseries** as $\{\tilde{y_t} \,\,|\,\, t \text{ mod }p = k\}$. For example, if $k$ represents months in a year, then we would group the values for January into a set, February into another set, and so on. For each of these cycle-subseries, perform a LOESS smoothing (intrepret this as a piecewise-linear regression on local neighborhoods). Collect the resulting smoothing cycle-subseries back into a full time series $C_t$.
+
+3) Apply a low-pass filtering of $C_t$. Specifically, take a moving average window of size $p$, followed by a moving average window of size 3, followed by a LOESS smoothing. Let $L_t$ be the resulting output.
+
+4) Define the seasonal component $\hat{S}(t)$ as $\hat{S}(t) := C_t - L_t$. Heuristically, the $L_t$ represents all the low-frequency patterns that got picked up by $C_t$, so we remove them here for a clearer signal.
+
+5) Compute the de-seasonalized series $Y_t - S(t)$.
+
+6) Apply LOESS smoothing to the de-seasonalized series to get the updated trend $\hat{Tr}(t)$. 
+
+This inner loop is repeated a number of times until the trend is sufficiently smooth. The outer loop is used to compute *robustness weights* to reflect the extremity fo the remainder terms.
+
+## Local Regression 
+
+### $k$-Nearest Neighbors
+
+Suppose we have a set of points in 2 dimensions:
+
+$$
+D = \{(x_i,y_i)\,\,|\,\, i = 1,\ldots, N\}
+$$
+
+```{r}
+us_retail_employment %>% 
+  ggplot(aes(Month, Employed)) + 
+  geom_point()
+```
+
+We want to fit a smooth curve $\hat{g}(x)$ to scatterplot and this requires solving 2 fundamental problems:
+
+1) For $x$ values that that *do not* show up in our data set, how do we interpolate the data to deduce a value $\hat{g}(x)$ for the unobserved $x$ value?
+
+2) If $x_1$ and $x_2$ are roughly the same value, then values $\hat{g}(x_1)$ and $\hat{g}(x_2)$ must also be roughly the same. How can make sure that $\hat{g}(x_1)$ and $\hat{g}(x_2)$ are sufficiently correlated when $x_1$ and $x_2$ are close to each other?
+
+The inspiration for the solution comes from considering the moving average window:
+
+$$
+\hat{g}(x_i) = \frac{1}{2k}\sum_{j=-k}^k y_{i+j}
+$$
+
+If we squint hard enough, we will eventually realize that this is really a local regression, specifically a $k$-nearest neighbors regression. For an arbitrary $x$ value, a $k$-nearest neighbors regression model can make a prediction $\hat{g}(x)$ by taking the average of the $x_i$ nearest to $x$; this is equivalent to fitting a piecewise-constant function (aka step function) $\hat{g}(x)$ to the scatterplot.
+
+Formally, let for any given $x$, let $N_k(x)$ be the set:
+
+$$
+N_k(x):= \{y_i \,\,|\,\, (x_i,y_i)\in D \text{ and } x_i \text{ is a k-nearest neighbor of }x \}
+$$
+
+Then for any $x$, define the curve $\hat{g}(x)$ as:
+
+$$
+\hat{g}(x) := \frac{1}{k}\sum_{y_i\in N_k(x)} y_i = \sum_{y_i\in N_k(x)}\frac{1}{k}y_i
+$$
+
+### Weighted Nearest Neighbors
+
+The issue with the $k$-nearest neighbors regression is that it gives all the neighbors of $x$ equal weighting, regardless of how near or far the neighbor actually is to $x$. To see why this is problematic consider the following example:
+
+```{r}
+set.seed(1738)
+
+sample_data <- tibble(
+  x = c(
+    rnorm(20, mean = 8, sd = 2),
+    rnorm(3, mean = 20, sd = 1)
+  ),
+  y = rnorm(x, mean = 0.5 * x, sd = 1)
+) 
+
+sample_data %>% 
+  ggplot(aes(x,y)) + 
+  geom_point() + 
+  ylim(0, 15)+
+  geom_vline(xintercept = 20, linetype = 'dashed', color = 'blue')
+  
+```
+
+Suppose we wanted to predict for $x = 20$. Using $k=5$ nearest neighbors, we would predict:
+
+```{r}
+nearest_neighbors <- sample_data %>% 
+  mutate(
+    distance = abs(x - 20)
+  ) %>% 
+  arrange(distance) %>% 
+  head(5)
+
+nearest_neighbors %>% 
+  DT::datatable()
+```
+
+```{r}
+pred <- mean(nearest_neighbors$y)
+
+sample_data %>% 
+  ggplot(aes(x,y)) + 
+  geom_point() + 
+  ylim(0, 15)+
+  geom_vline(xintercept = 20, linetype = 'dashed', color = 'blue') + 
+  geom_point(x=20, y= pred , color = 'blue', size = 3)
+```
+
+This prediction doesn't seem quite right: there are 3 neighbors very close to $x=20$ but the average is being dragged down by 2 of the neighbors very far away from $x=20$. Intuitively, $x=20$ is better represented by the 3 close neighbors than the 2 far neighbors. We can combat this problem by **weighting** the average based on how close a given neighbor is to $x$. Specifically, for a given neighbor $x_i$ to $x$, define the weight $W(x_i)$ for $x_i$ as:
+
+$$
+W(x_i) := \left( 1 - \left(\frac{|x_i - x|}{\max_{x_i}|x_i - x|}\right)^3 \right)^3
+$$
+
+Notice that as $|x_i - x|\to 0$ we get $W(x_i) = 1$, while $|x_i-x|\to \max_{x_i}|x_i - x|$ yields $W(x_i) = 0$. We can then define a weighted $k$-nearest neighbors regression model as:
+
+$$
+\hat{g}(x) := \sum_{x_i\in N_k(x)}\frac{W(x_i)}{\sum_{x_i\in N_k(x)}W(x_i)}y_i
+$$
+
+For example, in our toy data set from before:
+
+
+```{r}
+weighted_nearest_neighbors <- sample_data %>% 
+  mutate(
+    distance = abs(x - 20)
+  ) %>% 
+  arrange(distance) %>% 
+  head(6) %>% 
+  mutate(
+    max_distance = max(distance),
+    raw_weight = (1 - (distance/max_distance)^3)^3,
+    weight = raw_weight/sum(raw_weight)
+  ) 
+
+weighted_nearest_neighbors %>% 
+  DT::datatable()
+```
+
+```{r}
+pred <- weighted_nearest_neighbors %>% 
+  summarise(
+    pred = sum(weight * y)
+  ) %>% 
+  pull()
+
+sample_data %>% 
+  ggplot(aes(x,y)) + 
+  geom_point() + 
+  ylim(0, 15)+
+  geom_vline(xintercept = 20, linetype = 'dashed', color = 'blue') + 
+  geom_point(x=20, y= pred, color = 'blue', size = 3)
+```
+
+Notice the prediction seems much more reasonable now, since the model is able to dynamically adjust the weighting based on how near or far each neighbor is.
+
+### LOESS
+
+$k$-nearest neighbors is indeed a regression model because the sample mean is the *constant of best fit* w.r.t. to OLS (minimizing the square error). Weighted $k$-nearest neighbors returns the constant of best fit w.r.t. to weighted OLS (minizing the weighted square errors). Fundamentally, both models fit a *piecewise-constant* function (aka a *step* function) onto the scatterplot:
+
+```{r}
+get_knn_pred <- function(x_value, data, k){
+  pred <- sample_data %>% 
+    mutate(
+      distance = abs(x - x_value)
+    ) %>% 
+    arrange(distance) %>% 
+    head(5) %>% 
+    summarise(
+      pred = mean(y)
+    ) %>% 
+    pull()
+  
+  return(pred)
+}
+
+x_values <- seq(0, 30, by = 0.05)
+
+pred_values <- c()
+
+for (x_value in x_values){
+  pred_values <- c(pred_values, get_knn_pred(x_value, sample_data, k = 5))
+}
+
+tibble(
+  x = x_values,
+  y = pred_values
+) %>% 
+  ggplot(aes(x, y)) + 
+  geom_line() + 
+  geom_point(data = sample_data, mapping = aes(x, y))
+```
+
+This leads to an interesting idea: what if we tried fitting a piecewise linear function (or more generally a piecewise polynomial function) onto the scatterplot instead? This is exactly the idea behind **locally estimated scatterplot smoothing (LOESS)**. 
+
+To perform LOESS, start by considering some $x$ value which may or may not be observed in the training data. Let $N_k(x)$ denote the points $(x_i,y_i)$ which are the $k$-nearest neighbors observed in the training data. Let $P_{d,N_k(x)}(x)$ denote a degree $d$ polynomial fitted onto the set $N_k(x)$. The function $\hat{g}(x)$ fitted by LOESS is then defined as:
+
+$$
+\hat{g}(x):= P_{d; N_k(x)}(x)
+$$
+
+Typically, $d=1$ (linear) or $d=2$ (quadratic) is sufficient for fitting.
+
+---
