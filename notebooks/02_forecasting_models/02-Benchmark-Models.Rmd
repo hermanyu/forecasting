@@ -78,7 +78,7 @@ $$
 # the MEAN() function from fable will specify a mean model
 bricks_mean_model <- model(
   .data = bricks_train,
-  MEAN(Bricks)
+  `Mean Model` = MEAN(Bricks)
 )
 
 bricks_mean_model
@@ -119,27 +119,13 @@ On average, the mean model is off by 61 units, which corresponds to an average p
 
 ### Residual Diagnostics
 
-The residuals of the mean model fitted to the `brick` data are:
-
 ```{r}
 bricks_mean_model %>% 
-  augment() %>% 
-  autoplot(.resid) + 
-  geom_hline(yintercept = 0, linetype = "dashed", color = "blue") + 
-  labs(title = "Mean Model (Residuals)")
+  gg_tsresiduals() + 
+  labs(title = "Mean Model Residual Diagnostics")
 ```
 
-The residual plot exhibits autocorrelation and seasonal patterns. This is corroborated by the ACF plot of the residuals:
-
-```{r}
-bricks_mean_model %>% 
-  augment() %>% 
-  ACF(.resid) %>% 
-  autoplot() + 
-  labs(title = "ACF - Mean Model Residuals")
-```
-
-This indicates the model is biased and underfit, not too surprising considering the model predicts a constant value for all time points $t$.
+The residual plot exhibits autocorrelation and seasonal patterns, indicating the model is biased and underfit. This is not too surprising considering the simplicity of the model.
 
 # Naive Model
 
@@ -148,7 +134,8 @@ The autocorrelation exhibited by the residuals of the mean model indicate that A
 ```{r}
 bricks_train %>% 
   ACF(Bricks) %>% 
-  autoplot()
+  autoplot() + 
+  labs(title = "ACF - Australian Brick Production")
 ```
 
 The ACF plot reveals that Australian brick production exhibits strong autocorrelations with lags 1, 2, 3, 4, and 5. Consequently, this implies that $Y_t$ should be correlated with at least $Y_{t-1}$.
@@ -222,7 +209,7 @@ $$
 # the NAIVE() function from fable will specify a naive model
 bricks_naive_model <- model(
   .data = bricks_train,
-  NAIVE(Bricks)
+  `Naive Model` = NAIVE(Bricks)
 )
 
 bricks_naive_model
@@ -262,26 +249,13 @@ This model generalizes much better on out-of-sample data compared to the mean mo
 
 ### Residual Diagnostics
 
-The residual plot for the naive model is given by:
-
-```{r, warning = FALSE}
+```{r, warning=FALSE}
 bricks_naive_model %>% 
-  augment() %>% 
-  autoplot(.resid) + 
-  labs(title = "Naive Model (Residuals)")
+  gg_tsresiduals() + 
+  labs(title = "Naive Model Residual Diagnostics")
 ```
 
-The autocorrelation we saw from the mean model seems to have dissipated when moving to the naive model; this indicates the naive model does a good job at extracting the predictable information. We can check the autocorrelation plot as well:
-
-```{r}
-bricks_naive_model %>% 
-  augment() %>% 
-  ACF(.resid) %>% 
-  autoplot() + 
-  labs(title = "ACF - Naive Model Residuals")
-```
-
-The ACF shows that the most of the autocorrelation is indeed gone. However, we see something interesting: peroidic spikes of autocorrelation at lags 4, 8, 12, 16, etc. This indicates that the residuals exhibit a seasonal pattern with periodicity of 4 (i.e. there is a pattern based on the quarter of the year).
+The autocorrelation we saw from the mean model seems to have dissipated when moving to the naive model; this indicates the naive model does a good job at extracting the predictable information. However, we see something interesting: periodic spikes of autocorrelation at lags 4, 8, 12, 16, etc. This indicates that the residuals exhibit a seasonal pattern with periodicity of 4 (i.e. there is a pattern based on the quarter of the year).
 
 # Seasonal Naive Model
 
@@ -329,7 +303,7 @@ In other words, the seasonal naive model just predicts the value from the previo
 # a seasonal naive model
 bricks_seasonal_naive_model <- model(
   .data = bricks_train,
-  SNAIVE(Bricks)
+  `Seasonal Naive Model` = SNAIVE(Bricks)
 )
 
 bricks_seasonal_naive_model
@@ -371,20 +345,11 @@ The generalization errors for the seasonal naive model are marginally better tha
 
 ```{r, warning = FALSE}
 bricks_seasonal_naive_model %>% 
-  augment() %>% 
-  autoplot(.resid) + 
-  labs(title = "Seasonal Naive Model (Residuals)")
+  gg_tsresiduals() + 
+  labs(title = "Seasonal Naive Model Residual Diagnostics")
 ```
 
-The seasonal naive model (unsurprisingly) captured most of the regular cyclic behavior, but does not seem to capture as much of the autocorrelation as the naive model. We can check this claim by examining the ACF plot of the residuals.
-
-```{r}
-bricks_seasonal_naive_model %>% 
-  augment() %>% 
-  ACF(.resid) %>% 
-  autoplot() + 
-  labs(title = "ACF - Seasonal Naive Model Residuals")
-```
+The seasonal naive model (unsurprisingly) captured most of the regular cyclic behavior, but does not seem to capture as much of the autocorrelation as the naive model.
 
 # Combination Models
 
@@ -428,7 +393,7 @@ $$
 # within the model() function
 bricks_combo_model <- model(
   .data = bricks_train,
-  ( NAIVE(Bricks) + SNAIVE(Bricks) )/2
+  `Combo Model` = ( NAIVE(Bricks) + SNAIVE(Bricks) )/2
 )
 
 bricks_combo_model
@@ -468,22 +433,12 @@ The generalization errors are marginally better for the combination model than e
 
 ### Residual Diagnostics
 
-The residual plot of the combinatio model is given by:
-
-```{r, warning = FALSE}
+```{r, warning=FALSE}
 bricks_combo_model %>% 
-  augment() %>% 
-  autoplot(.resid)
+  gg_tsresiduals() + 
+  labs(title = "Combination Model Residual Diagnostics")
 ```
 
-Visually, it's hard to tell if the combination model has fixed the autocorrelation problem of the seasonal naive model, so we look at the ACF plot:
-
-```{r}
-bricks_combo_model %>% 
-  augment() %>%
-  ACF(.resid) %>% 
-  autoplot()
-```
 
 There is still autocorrelation in the residuals, but it has been reduced by a non-trivial amount.
 
@@ -539,7 +494,7 @@ bricks_drift_model <- model(
       "1980 Q4" ~ "1999 Q4"
     )
   ,
-  RW( Bricks ~ drift() )
+  `Random Walk With Drift` = RW( Bricks ~ drift() )
 )
 
 bricks_drift_model
@@ -573,20 +528,113 @@ bricks_drift_model %>%
 
 ### Residual Diagnostics
 
-```{r, warning = FALSE}
+```{r, warning=FALSE}
 bricks_drift_model %>% 
-  augment() %>% 
-  autoplot(.resid)
+  gg_tsresiduals() + 
+  labs(title = "Drift Model Residual Diagnostics")
+```
+
+# Time Series Decomposition Model
+
+## Model Specification
+
+We had previously discussed the concept of a time series decomposition by modeling the data generating process as:
+
+$$
+Y_t = Tr(t) + S(t) + \epsilon_t
+$$
+
+where $S(t)$ is a periodic function with period $p$.
+
+## Model Fitting
+ 
+When we originally discussed the time series decomposition model, it was primarily used as a "look back" model because the estimated trend component $Tr(t)$ was estimated using values at future times $y_{t+1},y_{t+2},\ldots, y_{t+k}$. This makes the original estimation procedure unsuitable for forecasting. However, the resulting seasonality component *does not depend* on future data, so the estimated $\hat{S}(t)$ *can be used* for forecasting. Therefore, to fit a time series decomposition model for forecasting, we do the following:
+
+1) Estimate the "historic" trend $\hat{Tr}_{hist}(t)$ and the seasonality component $\hat{S}(t)$ using either a classical decomposition or STL.
+2) De-season the time series by computing $\tilde{y}_t = y_t - \hat{S}(t)$.
+3) Re-estimate the trend component $\hat{Tr}(t)$ by fitting a forecasting model on the de-seasoned series $\tilde{y}_t$
+
+```{r}
+# Estimate the historic trend to extract the seasonal component.
+# The de-seasoned time series is stored in the season_adjust column.
+bricks_decomp_historic <- model(
+  .data = bricks_train,
+  historic_decomp = STL(
+    Bricks ~ trend(window = 8),
+    robust = TRUE
+  )
+) %>% 
+  components() %>% 
+  select(-.model)
+
+bricks_decomp_historic %>% 
+  head(10) %>% 
+  mutate(
+    across(where(is.numeric), ~round(., 3))
+  ) %>% 
+  datatable()
+```
+
+
+```{r}
+bricks_decomp_historic %>% 
+  autoplot(season_adjust) + 
+  labs("De-Seasoned Australian Brick Production")
 ```
 
 ```{r}
-bricks_drift_model %>% 
-  augment() %>% 
-  ACF(.resid) %>% 
-  autoplot()
+# Estimate the "true" trend on the de-seasoned series.
+bricks_decomp_trend_model <- model(
+  .data = bricks_decomp_historic
+  ,
+  `Naive Trend` = NAIVE(season_adjust)
+)
+
+bricks_decomp_trend_model
 ```
 
+```{r}
+bricks_decomp_trend_model %>% 
+  forecast(
+    h = 20
+  ) %>% 
+  autoplot(
+    bricks_decomp_historic
+  )
+```
 
+To recover a forecast for the actual $y_t$, we simply add the estimated $\hat{Tr}(t)$ from the naive model with the estimated $\hat{S}(t)$ from the STL model. This entire process is quite tedious to do manually, but thankfully `fable` has a built-in capability for performing all of these steps at once.
 
+```{r}
+bricks_decomp_model <- model(
+  .data = bricks_train,
+  `TS Decomp Model` = decomposition_model(
+    STL( Bricks ~ trend(window = 8), robust = TRUE),
+    NAIVE(season_adjust)
+  )
+)
 
+bricks_decomp_model %>% 
+  forecast(h=20) %>% 
+  autoplot(bricks)
+```
 
+## Model Evaluation
+
+### Out-Of-Sample Error
+
+```{r}
+bricks_decomp_model %>% 
+  forecast(h=20) %>% 
+  accuracy(bricks_test)
+```
+
+### Residual Diagnostics
+
+```{r, warning = FALSE}
+bricks_decomp_model %>% 
+  gg_tsresiduals()
+```
+
+The time series decomposition model seems to accurately capture most of the autocorrelation and seasonality.
+---

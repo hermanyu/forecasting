@@ -538,6 +538,22 @@ gdppc_fitted_model %>%
   autoplot()
 ```
 
+We can get the actual numerical values for the intervals using the `hilo()` function from `fable`:
+
+```{r}
+# The hilo() function from fable takes
+# a fable object as input and returns the prediction intervals
+# for the forecast as a table
+gdppc_fitted_model %>% 
+  filter(
+    Country == "United States"
+  ) %>% 
+  forecast(h = 10) %>% 
+  hilo()
+```
+
+Notice in particular that the prediction intervals shift according to the point estimate and get slighly larger with each future time step.
+
 ### Evaluating Prediction Intervals
 
 Once a method for generating the prediction intervals has been decided upon, the next step is to evaluate how accurate the prediction intervals are. Prediction intervals are statements of the form: "The actual value will fall within the prediction interval x% of the time". We can validate such statements by checking whether fitting a model on a training set, generating prediction intervals on a validation set, and observing if the values of the validation set fall within the prediction intervals as expected.
