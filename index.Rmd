@@ -14,3 +14,7 @@ output:
 5) [Autocorrelation](html/01_time_series/05-Autocorrelation.html)
 6) [Time Series Decomposition](html/01_time_series/06-Time-Series-Decomposition.html)
 
+# 02 - Forecasting Models
+
+1) [Forecasting Workflow](html/02_forecasting_models/01-Forecasting-Workflow.html)
+2) [Benchmark Models](html/02_forecasting_models/02-Benchmark-Models.html)

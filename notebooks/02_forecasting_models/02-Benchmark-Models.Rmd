@@ -1,0 +1,592 @@
+---
+title: "02: Benchmark Models"
+author: "Herman Yu"
+output:
+  rmdformats::downcute
+---
+
+# Introduction
+
+Forecasting might seem like a highly complex problem, but simple methods can actually produce rather effective forecasts. This section will discuss a few simple forecasting methods that can be used to establish baseline models; more sophisticated models should be compared against these established benchmarks. If a complex model only has marginally better performance than a simple method, we generally will prefer the simpler method.
+
+To ground our discussion, we will use the Australian brick production data found in the `aus_production` data set.
+
+```{r, warning=FALSE, message=FALSE}
+options(scipen=999)
+library(fpp3)
+library(DT)
+
+bricks <- aus_production %>% 
+  select(Bricks) %>% 
+  filter_index("1970 Q1" ~ "2004 Q4")
+
+bricks %>% 
+  autoplot(Bricks) + 
+  labs(title = "Australian Brick Production")
+```
+
+We will split our data set into a training set and testing set:
+
+```{r}
+bricks_train <- bricks %>% 
+  filter_index(
+    "1970 Q1" ~ "1999 Q4"
+  )
+
+bricks_test <- bricks %>% 
+  filter_index(
+    "2000 Q1" ~ "2004 Q4"
+  )
+```
+
+
+
+# Overall Mean Model
+
+## Model Specification 
+
+The **mean model** hypothesizes that the true data generation process is an i.i.d. random sample. Formally, we hypothesize that:
+
+$$
+Y_t = \mu + \epsilon_t
+$$
+
+where the $\epsilon_t$ are i.i.d. with $\epsilon_t \sim N(0, \sigma)$. In particular, this model implies that the $Y_t$ are also i.i.d. with $Y_t \sim N(\mu, \sigma)$. 
+
+## Model Fitting
+
+The deterministic piece is just the population mean $\mu = E[Y_t \,\,|\,\, t] = E[Y]$. We can estimate the population mean $\mu$ using the sample average:
+
+$$
+\hat{y}_t = \hat{\mu} = \frac{1}{T}\sum_{t=1}^Ty_i
+$$
+
+and the resulting fitted model $\hat{f}(t)$ just predicts the sample mean at each time $t$:
+
+$$
+\hat{f}(t) = \frac{1}{T}\sum_{t=1}^Ty_i
+$$
+
+Note that the constant function $\hat{f}(t)$ is equivalent to an OLS regression estimating a *constant of best fit*; the sample mean is the constant which minimizes the squared-error of a given sample.
+
+$$
+\hat{f}(t) = \hat{\mu} = \min_{c} \sum_{t=1}^T(y_i - c)^2
+$$
+
+```{r}
+# fit a mean model for Australian brick production;
+# the MEAN() function from fable will specify a mean model
+bricks_mean_model <- model(
+  .data = bricks_train,
+  MEAN(Bricks)
+)
+
+bricks_mean_model
+```
+
+```{r}
+sample_mean <- mean(bricks_train$Bricks)
+
+bricks_mean_model %>% 
+  forecast(h = 20) %>% 
+  autoplot(bricks) + 
+  geom_hline(yintercept = sample_mean, linetype = "dashed", color = "blue")
+```
+
+## Model Evaluation
+
+### Out-Of-Sample Error
+
+The various generalization errors of the mean model fitted are:
+
+```{r}
+mean_model_test_forecast <- forecast(
+  bricks_mean_model,
+  h = 20 # 2000 Q1 to 2004 Q4
+)
+
+accuracy(
+  mean_model_test_forecast,
+  bricks_test
+) %>% 
+  mutate(
+    across(where(is.numeric), ~round(., 3))
+  ) %>% 
+  datatable()
+```
+
+On average, the mean model is off by 61 units, which corresponds to an average percentage error of 16.3% relative to the actual value. 
+
+### Residual Diagnostics
+
+The residuals of the mean model fitted to the `brick` data are:
+
+```{r}
+bricks_mean_model %>% 
+  augment() %>% 
+  autoplot(.resid) + 
+  geom_hline(yintercept = 0, linetype = "dashed", color = "blue") + 
+  labs(title = "Mean Model (Residuals)")
+```
+
+The residual plot exhibits autocorrelation and seasonal patterns. This is corroborated by the ACF plot of the residuals:
+
+```{r}
+bricks_mean_model %>% 
+  augment() %>% 
+  ACF(.resid) %>% 
+  autoplot() + 
+  labs(title = "ACF - Mean Model Residuals")
+```
+
+This indicates the model is biased and underfit, not too surprising considering the model predicts a constant value for all time points $t$.
+
+# Naive Model
+
+The autocorrelation exhibited by the residuals of the mean model indicate that Australian brick production is a continuous function of time: observations close together in time will have similar values. Let us return to the beginning and perform some EDA:
+
+```{r}
+bricks_train %>% 
+  ACF(Bricks) %>% 
+  autoplot()
+```
+
+The ACF plot reveals that Australian brick production exhibits strong autocorrelations with lags 1, 2, 3, 4, and 5. Consequently, this implies that $Y_t$ should be correlated with at least $Y_{t-1}$.
+
+## Model Specification
+
+The **naive model** aka **random walk model** hypothesizes that the data generation process is recursive of the form:
+
+$$
+Y_0 = y_0\\
+Y_t = Y_{t-1} + \epsilon_t
+$$
+
+where the $\epsilon_t$ are i.i.d. with $e_t \sim N(0, \sigma)$. In particular, we can "unpack" the recursive definition to get:
+
+$$
+\begin{align*}
+Y_t &= Y_{t-1} + \epsilon_t \\
+&= Y_{t-2} + \epsilon_{t-1} + \epsilon_t\\
+&= \ldots \\
+&= Y_1 + \epsilon_2 + \ldots + \epsilon_t\\
+&= y_0 + \epsilon_1 + \epsilon_2 + \ldots + \epsilon_t\\
+\end{align*}
+$$
+
+Thus, the naive model says that the data is generated by starting at some point $y_0$, then taking a random step $\epsilon$ to reach the next value. For this reason, this process is also called a **random walk**.
+
+## Model Fitting
+
+The point estimate for $y_t$ based on the naive model specification is:
+
+$$
+E[Y_t \,\,|\,\,t] = E[Y_{t-1} + \epsilon_t \,\,|\,\, t]
+$$
+Note here the expected value is conditioned on $t$, so the point estimate *depends* on the information we have available at time $t$. In particular, if $t \leq T + 1$, then the time point $t-1$ is within the observed sample and $Y_{t-1}$ is no longer random but takes on the definite value $y_{t-1}$:
+
+$$
+\begin{align*}
+E[Y_t\,\,|\,\,T] &= E[Y_{t-1} + \epsilon_t \,\,|\,\, T]\\
+&= E[Y_{t-1}\,\,|\,\,T] + E[\epsilon_t \,\,|\,\, T]\\
+&= y_{t-1} + E[\epsilon_t \,\,|\,\,T]\\
+&= y_{t-1}
+\end{align*}
+$$
+
+On the other hand, if $t > T + 1$, then we no longer have information on $y_{t-1}$, in this case $Y_t$ must still be treated as a random variable:
+
+$$
+\begin{align*}
+E[Y_t\,\,|\,\,t] &= E[Y_{t-1} + \epsilon_t \,\,|\,\, T]\\
+&= E[Y_{t-1}\,\,|\,\,T] + E[\epsilon_t \,\,|\,\, T]\\
+&= E[Y_{t-2}\,\,|\,\,T] + E[\epsilon_{t-1} \,\,|\,\, T] + E[\epsilon_t \,\,|\,\, T]\\
+&= \ldots \\
+&= E[Y_t\,\,|\,\,T] + E[\epsilon_{T+1} \,\,|\,\, T] + \ldots + E[\epsilon_t \,\,|\,\, T]\\
+&= y_T + E[\epsilon_{T+1} \,\,|\,\, T] + \ldots + E[\epsilon_t \,\,|\,\, T]\\
+&= y_T
+\end{align*}
+$$
+
+Therefore, the naive model will fit a function of the form:
+
+$$
+\hat{f}(t) := \hat{y}_t = \begin{cases}
+y_{t-1} & t \leq T + 1\\
+y_T & t > T + 1
+\end{cases}
+$$
+
+```{r}
+# fit a naive model (aka random walk);
+# the NAIVE() function from fable will specify a naive model
+bricks_naive_model <- model(
+  .data = bricks_train,
+  NAIVE(Bricks)
+)
+
+bricks_naive_model
+```
+
+```{r}
+bricks_naive_model %>% 
+  forecast(
+    h = 20
+  ) %>% 
+  autoplot(
+    bricks
+  )
+```
+
+## Model Evaluation
+
+### Out-Of-Sample Error
+
+The various generalization errors for the naive model are:
+
+```{r}
+bricks_naive_model %>% 
+  forecast(
+    h = 20
+  ) %>% 
+  accuracy(
+    bricks_test
+  ) %>% 
+  mutate(
+    across(where(is.numeric), ~round(., 3))
+  ) %>% 
+  datatable()
+```
+
+This model generalizes much better on out-of-sample data compared to the mean model. The MAE is 26 units with corresponds to an average percentage error of only 7% relative to the actual values.
+
+### Residual Diagnostics
+
+The residual plot for the naive model is given by:
+
+```{r, warning = FALSE}
+bricks_naive_model %>% 
+  augment() %>% 
+  autoplot(.resid) + 
+  labs(title = "Naive Model (Residuals)")
+```
+
+The autocorrelation we saw from the mean model seems to have dissipated when moving to the naive model; this indicates the naive model does a good job at extracting the predictable information. We can check the autocorrelation plot as well:
+
+```{r}
+bricks_naive_model %>% 
+  augment() %>% 
+  ACF(.resid) %>% 
+  autoplot() + 
+  labs(title = "ACF - Naive Model Residuals")
+```
+
+The ACF shows that the most of the autocorrelation is indeed gone. However, we see something interesting: peroidic spikes of autocorrelation at lags 4, 8, 12, 16, etc. This indicates that the residuals exhibit a seasonal pattern with periodicity of 4 (i.e. there is a pattern based on the quarter of the year).
+
+# Seasonal Naive Model
+
+The naive model did a good job at modeling the autocorrelation, but we a seasonal pattern exists within the residual plots. This indicates we should once again return to our data and perform some EDA:
+
+```{r}
+bricks_train %>% 
+  gg_season(Bricks, period = "year") + 
+  labs(title = "Australian Brick Production (By Time Of Year)")
+```
+
+The seasonal plot of Australian brick production shows that the data does have a strong seasonal pattern: brick production starts off lower in Q1, rises throughout Q2 and Q3, then flattens in Q4.
+
+## Model Specification
+
+The **seasonal naive model** hypothesizes that the data generation process follows a periodic recursive form:
+
+$$
+\begin{align*}
+Y_0 &= y_0\\\
+&\vdots\\
+Y_{p-1} &= y_{p-1}\\
+Y_t &= Y_{t-p} + \epsilon_t
+\end{align*}
+$$
+
+where $p$ is the periodicity of the seaosnality. This is equivalent to saying that the data will follow a naive model after controlling for the seasonal period.
+
+## Modeling Fitting
+
+Since the seasonal naive model reduces to a naive model after grouping by seasonal period, the logic from the previous section can be used derive the point estimates for the seasonal naive model.
+
+$$
+\hat{f}(t) = \hat{y}_t := \begin{cases}
+y_{t-p} & t \leq T+p\\
+y_{T- (t \text{ mod p})} & t > T+P 
+\end{cases}
+$$
+
+In other words, the seasonal naive model just predicts the value from the previous seasonal period.
+
+```{r}
+# fit a seasonal naive model;
+# the SNAIVE() function from fable specifies
+# a seasonal naive model
+bricks_seasonal_naive_model <- model(
+  .data = bricks_train,
+  SNAIVE(Bricks)
+)
+
+bricks_seasonal_naive_model
+```
+
+```{r}
+bricks_seasonal_naive_model %>% 
+  forecast(
+    h = 20
+  ) %>% 
+  autoplot(
+    bricks
+  )
+```
+
+## Model Evaluation
+
+### Out-Of-Sample Error
+
+The various generalization errors for the seasonal naive model are:
+
+```{r}
+bricks_seasonal_naive_model %>% 
+  forecast(
+    h = 20
+  ) %>% 
+  accuracy(
+    bricks_test
+  ) %>% 
+  mutate(
+    across(where(is.numeric), ~round(., 3))
+  ) %>% 
+  datatable()
+```
+
+The generalization errors for the seasonal naive model are marginally better than the naive model.
+
+### Residual Diagnostics
+
+```{r, warning = FALSE}
+bricks_seasonal_naive_model %>% 
+  augment() %>% 
+  autoplot(.resid) + 
+  labs(title = "Seasonal Naive Model (Residuals)")
+```
+
+The seasonal naive model (unsurprisingly) captured most of the regular cyclic behavior, but does not seem to capture as much of the autocorrelation as the naive model. We can check this claim by examining the ACF plot of the residuals.
+
+```{r}
+bricks_seasonal_naive_model %>% 
+  augment() %>% 
+  ACF(.resid) %>% 
+  autoplot() + 
+  labs(title = "ACF - Seasonal Naive Model Residuals")
+```
+
+# Combination Models
+
+For the naive and seasonal naive model, we observed that:
+
+1) The naive model does a good job at capturing the autocorrelation but not the seasonality.
+2) The seasonal naive model does a good job at capturing seasonality, but still leaves a lot of autocorrelation.
+
+It would be great if we could somehow combine both the models to capture the autocorrelation *and* the seasonality at the same time.
+
+## Model Specification
+
+We hypothesize that the data generation process is a combination of the naive and seasonal naive model:
+
+$$
+\begin{align*}
+Y_0 &= y_0\\\
+&\vdots\\
+Y_{p-1} &= y_{p-1}\\
+Y_t &= \frac{Y_{t-1} + Y_{t-p}}{2} + \epsilon_t
+\end{align*}
+$$
+
+More generally, a **combination model** or **Delphi model** is an average of multiple different forecasting models. This is analogous to an **ensemble model** in machine learning.
+
+## Model Fitting
+
+The combination model amounts to taking an average of the point estimates from the naive and seasonal naive models:
+
+$$
+\hat{f}(t) = \hat{y}_t := \begin{cases}
+\frac{y_{t-1} + y_{t-p}}{2} & t \leq T+p\\
+\frac{y_T + y_{T- (t \text{ mod p})}}{2} & t > T+P 
+\end{cases}
+$$
+
+```{r}
+# fit a combination of 
+# the naive and seasonal naive models;
+# this can be done by specifying the arithmetic
+# within the model() function
+bricks_combo_model <- model(
+  .data = bricks_train,
+  ( NAIVE(Bricks) + SNAIVE(Bricks) )/2
+)
+
+bricks_combo_model
+```
+
+```{r}
+bricks_combo_model %>% 
+  forecast(
+    h = 20
+  ) %>% 
+  autoplot(
+    bricks
+  )
+```
+
+## Model Evaluation
+
+### Out-Of-Sample Error
+
+The various generalization errors of the model is given by:
+
+```{r}
+bricks_combo_model %>% 
+  forecast(
+    h = 20
+  ) %>% 
+  accuracy(
+    bricks_test
+  ) %>% 
+  mutate(
+    across(where(is.numeric), ~round(., 3))
+  ) %>% 
+  datatable()
+```
+
+The generalization errors are marginally better for the combination model than each individual model. This is a good sign.
+
+### Residual Diagnostics
+
+The residual plot of the combinatio model is given by:
+
+```{r, warning = FALSE}
+bricks_combo_model %>% 
+  augment() %>% 
+  autoplot(.resid)
+```
+
+Visually, it's hard to tell if the combination model has fixed the autocorrelation problem of the seasonal naive model, so we look at the ACF plot:
+
+```{r}
+bricks_combo_model %>% 
+  augment() %>%
+  ACF(.resid) %>% 
+  autoplot()
+```
+
+There is still autocorrelation in the residuals, but it has been reduced by a non-trivial amount.
+
+# Drift Model
+
+The forecast for the naive and seasonal naive models are semi-constant across time. Consequently, the forecasts from these models will become worse if the data is trending in a certain direction. For example, consider the Australian brick prodution data from 1980 to 1999:
+
+```{r}
+bricks_train %>% 
+  filter_index(
+    "1980 Q4" ~ "1999 Q4"
+  ) %>% 
+  autoplot(Bricks)
+```
+
+We see a consistent downward trend starting from 1980 through the end of 1999.
+
+## Model Specification
+
+A **drift** or **random walk with drift** model is a model of the following form:
+
+$$
+\begin{align*}
+Y_0 &= y_0 \\
+Y_t &= a + Y_{t-1} + \epsilon_t
+\end{align*}
+$$
+
+As with the random walk model, we can "unpack" the recursive definition to get:
+
+$$
+\begin{align*}
+Y_t &= a + Y_{t-1} + \epsilon_t \\
+&= 2a + Y_{t-2} + \epsilon_{t-1} + \epsilon_t\\
+&= \ldots \\
+&= (t-1)a + Y_1 + \epsilon_2 + \ldots + \epsilon_t\\
+&= ta + y_0 + \epsilon_1 + \epsilon_2 + \ldots + \epsilon_t\\
+\end{align*}
+$$
+
+This is equivalent to including a linear trend $t\cdot a$ in the random walk model.
+
+## Model Fitting
+
+```{r}
+# fit a random walk with drift model;
+# the RW() function will specify a random walk model
+# and the special drift() can be used to indicate a drift term
+# in the model formula
+bricks_drift_model <- model(
+  .data = bricks_train %>% 
+    filter_index(
+      "1980 Q4" ~ "1999 Q4"
+    )
+  ,
+  RW( Bricks ~ drift() )
+)
+
+bricks_drift_model
+```
+
+```{r}
+bricks_drift_model %>% 
+  forecast(
+    h = 20
+  ) %>% 
+  autoplot(
+    bricks
+  )
+```
+
+## Model Evaluation
+
+### Out-Of-Sample Error
+
+```{r}
+bricks_drift_model %>% 
+  forecast(h = 20) %>% 
+  accuracy(
+    bricks_test
+  ) %>% 
+  mutate(
+    across(where(is.numeric), ~round(., 3))
+  ) %>% 
+  datatable()
+```
+
+### Residual Diagnostics
+
+```{r, warning = FALSE}
+bricks_drift_model %>% 
+  augment() %>% 
+  autoplot(.resid)
+```
+
+```{r}
+bricks_drift_model %>% 
+  augment() %>% 
+  ACF(.resid) %>% 
+  autoplot()
+```
+
+
+
+
+
