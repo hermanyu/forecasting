@@ -1,0 +1,484 @@
+---
+title: "04: Time Series Decomposition Model"
+author: "Herman Yu"
+output:
+  rmdformats::downcute
+---
+
+# Introduction
+
+This notebook will explore the performance of additive time series decomposition models. The hypothesized data generation process is an additive model:
+
+$$
+Y_t = Tr(t) + S(t) + \epsilon_t
+$$
+
+where:
+
+* $Tr(t)$ is a non-periodic smooth function called the **trend**.
+* $S(t)$ is a periodic function with period $p$ and mean 0 called the **seasonality** .
+  * Formally, we require that $\int_0^pS(t)\,\,dt = 0$
+* $\epsilon_t$ is a random error with mean 0.
+
+The corresponding forecasting model $\hat{f}(t)$ derived from this data generation process is:
+
+$$
+\begin{align*}
+\hat{f}(t) := \hat{Tr}(t) + \hat{S}(t)
+\end{align*}
+$$
+
+where $\hat{Tr}(t)$ and $\hat{S}(t)$ are estimates for the trend and seasonality. Note that different fitting procedures will result in different estimates for $\hat{Tr}(t)$ and $\hat{S}(t)$. Two of the most well-known fitting procedures are:
+
+1) **Classical Decomposition.** This procedure starts by estimating a "historic" trend $\hat{Tr}_{past}(t)$ using a $2\times p$-moving average window. The seasonality component $\hat{S}(t)$ is then estimated by taking the sample mean of the data grouped by seasonal period. The solution is to Next, a de-seasoned time series $\tilde{y}_t = y_t - \hat{S}(t)$ is computed and the "true" trend estimate $\hat{Tr}(t)$ is estimated for the de-seasoned series.
+
+2) **STL Decomposition.** This procedures estimates the seasonality component first using an local regression process called LOESS. The seasonality component is then removed to get a de-seasoned series and a trend component is estimated on the de-seasoned series via LOESS as well.
+
+We explore both procedures and evaluate their performance on a train-test split of our data set.
+
+# Setup
+
+## Libraries and Global Variables
+
+```{r, warning=FALSE, message=FALSE}
+options(scipen=999)
+DATA_DIR <- Sys.getenv("DATA_DIR")
+DATA_PATH <- paste0(DATA_DIR, "/store-sales-time-series/train.csv")
+
+library(fpp3)
+library(readr)
+library(DT)
+library(scales)
+```
+
+## Load Data
+```{r, warning=FALSE, message=FALSE}
+# The store sales data set has 1 record
+# per date x family x store_nbr.
+# We won't be using the onpromotion variable
+# for the naive model.
+df <- read_csv(DATA_PATH) %>% 
+  as_tsibble(
+    key = c(family, store_nbr),
+    index = date
+  ) %>% 
+  select(
+    -c(
+      id
+    )
+  )
+
+df %>% 
+  head(5) %>% 
+  datatable()
+```
+
+```{r, message=FALSE, warning=FALSE}
+# check how many days into future we need to forecast
+# for the test data set
+df_submit <- read_csv(paste0(DATA_DIR, "/store-sales-time-series/test.csv")) 
+
+df_submit %>% 
+  summarise(
+    start_date = min(date),
+    end_date = max(date)
+  )
+```
+
+## The Evaluation Criterion
+
+The evaluation criterion is the **root mean squared logarithmic error** defined as:
+
+$$
+RMSLE := \sqrt{\frac{1}{n}\sum_{t=T+1}^{T+n} \left( \log(1 + \hat{y}_t) - \log(1 + y_t) \right)^2} 
+$$
+
+```{r}
+rmsle <- function(df, actuals, forecast){
+  df %>% 
+    mutate(
+      squared_log_error = ( log(1 + !!sym(actuals)) - log(1 + !!sym(forecast)) )^2
+    ) %>% 
+    summarise(
+      rmsle = sqrt(mean(squared_log_error))
+    )
+}
+```
+
+Note that $\log(1+\hat{y}_t) - \log(1 + y_t) = \log \frac{1 + \hat{y}_t}{1 + y_t}$, so the metric is semi-independent from scale. However, this metric will penalize underestimates more heavily than overestimates. For example, suppose the true value is $y_t = 2$. If we underestimate by 2 units, say $\hat{y}_t = 0$, then the square logarithmic error becomes $(\log\frac{1}{3})^2 = 1.207$. If we overestimate by 2 units, say $\hat{y}_t = 4$, then the square logarithmic error becomes $(\log\frac{5}{3})^2 = 0.261$.
+
+Mathematically, this is because the logarithm "stretches" the interval $(0,1)$ into the larger interval $(-\infty, 0)$, while also "squeezing" the interval $(1, b)$ into a smaller  $(1, \log b)$. Consequently, the RMSLE metric will always reward overestimates. This may or may not be desirable depending on the business use case. For example, if a canned good costs $1.00$ USD to stock and is sold for $1.50$ USD, then the opportunity cost of underestimating by 1 unit is *higher* than the opportunity cost of overestimating by 1 unit.
+
+# Data Preparation
+
+The sales data in our data set does not start at the same time for all families and stores. The existence of leading 0's will potentially lead to severe bias when estimating the seasonal component and variance of error term. For this reason, we will need to filter out the leading zeros in the data set for each `family` x `store_nbr` combination. The simplest solution is to just start all our time series on a common date where we know they have sales.
+
+
+```{r}
+# Submission data asks us  to forecast 16 days ahead
+# from 8/15/2017 to 8/31/2017.
+# We do a train-test split so that the test set
+# is also exactly 16 days 
+train_test_split_date <- "2017-07-30"
+
+df_train <- df %>% 
+  filter(
+    date >= "2017-04-20"
+  ) %>% 
+  filter(
+    date <= train_test_split_date
+  ) %>% 
+  fill_gaps(sales = 0)
+
+df_test <- df %>% 
+  filter(
+    date > train_test_split_date
+  )
+
+h_length <- df_test %>% 
+  distinct(date) %>% 
+  pull() %>% 
+  length()
+```
+
+# Classical Decomposition Model
+
+## Model Fitting
+
+Start be estimating the seasonality using a classical decomposition.
+
+```{r}
+sales_classic_decomp <- model(
+    .data = df_train,
+    `Classical Decomposition` = classical_decomposition(
+      sales ~ season(7)
+    )
+  ) %>% 
+  components() %>% 
+  as_tsibble(
+    key = c(family, store_nbr),
+    index = date
+  ) %>% 
+  select(
+    date,
+    family,
+    store_nbr,
+    seasonal,
+    sales = season_adjust
+  )
+
+sales_classic_decomp %>% 
+  head(10)
+```
+
+The `season_adjust` column contains the de-seasoned time series; we will fit a linear trend
+
+```{r}
+sales_classic_decomp_deseasoned_model <- model(
+  .data = sales_classic_decomp,
+  TSLM(sales ~ trend())
+)
+
+sales_classic_decomp_deseasoned_model %>% 
+  head(5)
+```
+
+To generate a forecast, we forecast the de-seasoned component first, then add the seasonal component back in. IMPORTANT NOTE: because we fitted a linear trend, it's possible for a negative trend to decrease past 0 and predict negative sales. A prediction of negative sales is obviously going to be wrong, so we will have to manually correct this by implementing a lowerbound of 0 to our point estimates.
+
+```{r}
+sales_classic_decomp_forecast <- sales_classic_decomp_deseasoned_model %>% 
+  forecast(
+    h = h_length
+  ) %>% 
+  mutate(
+    week_day = wday(date)
+  ) %>% 
+  left_join(
+    sales_classic_decomp %>% 
+      as_tibble() %>% 
+      mutate(
+        week_day = wday(date)
+      ) %>% 
+      group_by(family, store_nbr, week_day) %>% 
+      summarise(
+        seasonal = mean(seasonal)
+        ,.groups = "drop"
+      )
+    ,
+    by = c("family", "store_nbr", "week_day")
+  ) %>% 
+  mutate(
+    sales = sales - pmin(.mean, 0) + seasonal,
+    .mean = pmax(.mean, 0) + seasonal
+  )
+
+sales_classic_decomp_forecast %>% 
+  head(5)
+```
+
+```{r, warning = FALSE, message = FALSE, fig.height = 10, fig.width = 8}
+sales_classic_decomp_forecast %>% 
+  filter(
+    family %in% c("GROCERY I", "BEVERAGES"),
+    store_nbr %in% c(44, 45)
+  ) %>% 
+  autoplot(
+    df %>% 
+      filter(
+        date >= "2017-01-01",
+        family %in% c("GROCERY I", "BEVERAGES"),
+        store_nbr %in% c(44, 45)
+      )
+  )
+```
+
+## Model Evaluation 
+
+### Out-Of-Sample Error
+
+```{r}
+sales_classic_decomp_errors <- sales_classic_decomp_forecast %>% 
+  accuracy(
+    df_test
+  ) 
+
+sales_classic_decomp_errors %>% 
+  filter(
+    is.finite(MAPE)
+  ) %>% 
+  arrange(
+    desc(MAPE)
+  ) %>% 
+  mutate(
+    across(where(is.numeric), ~round(., 4))
+  ) %>% 
+  select(
+    -c(
+      .model,
+      .type,
+      MASE,
+      RMSSE
+    )
+  ) %>% 
+  datatable()
+```
+
+The MAPE values for this model seem much better than the previous random walk model. In particular, the large MAPE values for store 48 and 35's Home And Kitchen Sales have been reduced by a large amount.
+
+```{r}
+sales_classic_decomp_forecast %>% 
+  filter(
+    family == "HOME AND KITCHEN II",
+    store_nbr %in% c(35, 48)
+  ) %>% 
+  autoplot(
+    df %>% 
+      filter(
+        family == "HOME AND KITCHEN II",
+        store_nbr %in% c(35, 48),
+        date >= "2017-01-01"
+      )
+  )
+```
+
+Ladies wear, Lingerie, and Liquor/Beer/Wine seem to be the most common families with high MAPE values. Let's investigate these now:
+
+```{r, fig.height = 12, fig.width = 8}
+sales_classic_decomp_forecast %>% 
+  filter(
+    (family == "LADIESWEAR" & store_nbr %in% c(11, 50)) |
+      (family == "LIQUOR,WINE,BEER" & store_nbr %in% c(35, 16)) | 
+      (family == "LINGERIE" & store_nbr %in% c(42, 19))
+  ) %>% 
+  autoplot(
+    df %>% 
+      filter(
+        (family == "LADIESWEAR" & store_nbr %in% c(11, 50)) |
+          (family == "LIQUOR,WINE,BEER" & store_nbr %in% c(35, 16)) |
+          (family == "LINGERIE" & store_nbr %in% c(42, 19))
+        ,
+        date >= "2017-04-20"
+      )
+  )
+```
+
+Notes:
+* Ladies wear sales for store 11 are overestimated, likely due to an overestimated trend line from the large spike in July.
+* Liquor, Wine, Beer sales for store 35 are slightly underestimated, likely due to a negative trend that was caused by the larger spikes in April, May and June.
+* Lingerie sales for stores 19 and 42 do not seem to align with the predicted seasonality.
+* Ladies wear for store 50 had a large predicted spike due to seasonality, but the actual sales for that day did not materialize.
+
+### Model Score
+
+```{r}
+df_test %>% 
+  as_tibble() %>% 
+  left_join(
+    sales_classic_decomp_forecast %>% 
+      as_tibble() %>% 
+      select(
+        date,
+        family,
+        store_nbr,
+        forecast = .mean
+      )
+    ,
+    by = c("date", "family", "store_nbr")
+  ) %>% 
+  mutate(
+    forecast = ifelse(
+      (forecast < 0) | (is.na(forecast)), 
+      0, 
+      forecast
+    )
+  ) %>% 
+  rmsle(
+    actuals = "sales",
+    forecast = "forecast"
+  )
+```
+
+The RMSLE metric for this model is lower than the random walk model, which isn't surprising considering the model is able to capture some of the trend and seasonal patterns.
+
+# STL Decomposition Model
+
+We now utilize an STL decomposition and investigate it's performance and validity. Fitting the previous classical decomposition model was rather tedious
+since we had to manually extract the seasonal component and de-seasoned time series, then add the seasonality back in at forecast time. We streamline that procedure a bit here by using the `decomposition_model()` special inside the `fable::model()` function.
+
+## Model Fitting
+
+```{r, warning = FALSE, message = FALSE, fig.height = 10, fig.width = 8}
+sales_stl_decomp_model <- model(
+  .data = df_train
+  ,
+  stl = decomposition_model(
+    STL( sales ~ trend(window = 7), robust = TRUE ),
+    TSLM( season_adjust ~ trend() )
+  )
+)
+
+sales_stl_decomp_model %>% 
+  filter(
+    family %in% c("GROCERY I", "BEVERAGES"),
+    store_nbr %in% c(44, 45)
+  ) %>% 
+  forecast(
+    h = h_length
+  ) %>% 
+  autoplot(
+    df %>% 
+      filter(
+        date >= "2017-01-01",
+        family %in% c("GROCERY I", "BEVERAGES"),
+        store_nbr %in% c(44, 45)
+      )
+  )
+```
+
+## Model Evaluation
+
+Note as with the previous model, we need to implement a lower bound of 0 on the estimated trend.
+### Out-Of-Sample Error
+
+```{r}
+sales_stl_decomp_forecast <- sales_stl_decomp_model  %>% 
+  forecast(
+    h = h_length
+  ) %>% 
+  mutate(
+    sales = sales - pmin(.mean, 0),
+    .mean = pmax(.mean, 0)
+  )
+
+sales_stl_decomp_forecast %>% 
+  accuracy(
+    df_test
+  ) %>% 
+  filter(
+    is.finite(MAPE)
+  ) %>% 
+  arrange(
+    desc(MAPE)
+  ) %>% 
+  mutate(
+    across(where(is.numeric), ~round(., 4))
+  ) %>% 
+  select(
+    -c(
+      .model,
+      .type,
+      MASE,
+      RMSSE
+    )
+  ) %>% 
+  datatable()
+```
+
+Ladieswear for store 11 and Grocery II for store 15 have a higher MAPE but all the remaining forecasts have a slighly lower MAPE.
+
+```{r}
+sales_classic_decomp_forecast %>% 
+  filter(
+    (family == "LADIESWEAR" & store_nbr == 11) |
+      (family == "GROCERY II" & store_nbr == 15)
+  ) %>% 
+  autoplot(
+    df %>% 
+      filter(
+        (family == "LADIESWEAR" & store_nbr == 11) |
+          (family == "GROCERY II" & store_nbr == 15)
+        ,
+        date >= "2017-01-01"
+      )
+  )
+```
+
+Both forecasts overestimate the true value.
+
+### Residual Diagnostics
+
+```{r, warning=FALSE}
+sales_stl_decomp_model %>% 
+  filter(
+    family == "GROCERY II",
+    store_nbr == 15
+  ) %>% 
+  gg_tsresiduals()
+```
+
+Most of the seasonality we observed at lags 7, 14, 21, etc. has been tamed, indicating the STL model did a good job capturing the seasonality.
+
+### Model Score
+
+```{r}
+df_test %>% 
+  left_join(
+    sales_stl_decomp_forecast %>% 
+      as_tibble() %>% 
+      select(
+        date,
+        family,
+        store_nbr,
+        forecast = .mean
+      )
+    ,
+    by = c("date", "family", "store_nbr")
+  ) %>% 
+  as_tibble() %>% 
+  mutate(
+    forecast = ifelse(
+      (forecast < 0) | (is.na(forecast)),
+      0,
+      forecast
+    )
+  ) %>% 
+  rmsle(
+    actuals = "sales",
+    forecast = "forecast"
+  )
+```
+
+The RMSLE for the STL Model is an improvement over the Classical Decomposition Model
+
+---
+

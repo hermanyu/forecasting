@@ -18,3 +18,9 @@ output:
 
 1) [Forecasting Workflow](html/02_forecasting_models/01-Forecasting-Workflow.html)
 2) [Benchmark Models](html/02_forecasting_models/02-Benchmark-Models.html)
+
+# Projects
+
+1) [Kaggle Competition: Forecasting Store Sales](projects/store-sales-forecasting/project-store-sales-forecasting.html)
+
+---

@@ -1,0 +1,294 @@
+---
+title: "03: Random Walk Model"
+author: "Herman Yu"
+output:
+  rmdformats::downcute
+---
+
+# Introduction
+
+This notebook will explore the performance of a simple random walk model (aka "naive" model). The hypothesized data generation process is a so-called **random walk** process:
+
+$$
+\begin{align*}
+Y_{i,j,1} &= y_{i,j,1}\\
+Y_{i,j,t} &= Y_{i,j,t-1} + \epsilon_{i,j,t}
+\end{align*}
+$$
+
+where $i$ denotes the `family`, $j$ the `store_nbr`, $t \in \{1,\ldots,T\}$ is the time index, and $\epsilon_{i,j,t}$ is a random variable with mean 0. The hypothesized process is autoregressive of order 1, making it a good candidate to model time series data with heavy autocorrelation.
+
+The corresponding forecasting model $\hat{f}(t)$ derived from the random walk process is the **naive model**, which just generates point estimates $\hat{y}_t$ for $y_t$ in the following way:
+
+$$
+\hat{f}_{i,j}(t) = \hat{y}_{i,j,t} := \begin{cases}
+y_{i,j,t-1} & t \leq T+1\\
+y_{i,j,T} & T > T + 1
+\end{cases}
+$$
+
+# Setup
+
+## Libraries and Global Variables
+
+```{r, warning=FALSE, message=FALSE}
+options(scipen=999)
+DATA_DIR <- Sys.getenv("DATA_DIR")
+DATA_PATH <- paste0(DATA_DIR, "/store-sales-time-series/train.csv")
+
+library(fpp3)
+library(readr)
+library(DT)
+library(scales)
+```
+
+## Load Data
+```{r, warning=FALSE, message=FALSE}
+# The store sales data set has 1 record
+# per date x family x store_nbr.
+# We won't be using the onpromotion variable
+# for the naive model.
+df <- read_csv(DATA_PATH) %>% 
+  as_tsibble(
+    key = c(family, store_nbr),
+    index = date
+  ) %>% 
+  select(
+    -c(
+      id
+    )
+  )
+
+df %>% 
+  head(5) %>% 
+  datatable()
+```
+
+```{r, message=FALSE, warning=FALSE}
+# check how many days into future we need to forecast
+# for the test data set
+df_submit <- read_csv(paste0(DATA_DIR, "/store-sales-time-series/test.csv")) 
+
+df_submit %>% 
+  summarise(
+    start_date = min(date),
+    end_date = max(date)
+  )
+```
+
+## The Evaluation Criterion
+
+The evaluation criterion is the **root mean squared logarithmic error** defined as:
+
+$$
+RMSLE := \sqrt{\frac{1}{n}\sum_{t=T+1}^{T+n} \left( \log(1 + \hat{y}_t) - \log(1 + y_t) \right)^2} 
+$$
+
+```{r}
+rmsle <- function(df, actuals, forecast){
+  df %>% 
+    mutate(
+      squared_log_error = ( log(1 + !!sym(actuals)) - log(1 + !!sym(forecast)) )^2
+    ) %>% 
+    summarise(
+      rmsle = sqrt(mean(squared_log_error))
+    )
+}
+```
+
+Note that $\log(1+\hat{y}_t) - \log(1 + y_t) = \log \frac{1 + \hat{y}_t}{1 + y_t}$, so the metric is semi-independent from scale. However, this metric will penalize underestimates more heavily than overestimates. For example, suppose the true value is $y_t = 2$. If we underestimate by 2 units, say $\hat{y}_t = 0$, then the square logarithmic error becomes $(\log\frac{1}{3})^2 = 1.207$. If we overestimate by 2 units, say $\hat{y}_t = 4$, then the square logarithmic error becomes $(\log\frac{5}{3})^2 = 0.261$.
+
+```{r}
+y_actual <- seq(2, 20, by = 2)
+delta <- 2
+
+tibble(
+  y_actual = y_actual,
+  under_est = y_actual - delta,
+  over_est = y_actual + delta
+) %>% 
+  mutate(
+    under_est_sqlog_err = ( log(1 + under_est) - log(1 + y_actual) )^2,
+    over_est_sqlog_err = ( log(1 + over_est) - log(1 + y_actual) )^2
+  ) %>% 
+  mutate(
+    under_est_sqlog_err = round(under_est_sqlog_err, 4),
+    over_est_sqlog_err = round(over_est_sqlog_err, 4)
+  ) %>% 
+  datatable()
+```
+
+Mathematically, this is because the logarithm "stretches" the interval $(0,1)$ into the larger interval $(-\infty, 0)$, while also "squeezing" the interval $(1, b)$ into a smaller  $(1, \log b)$. Consequently, the RMSLE metric will always reward overestimates. This may or may not be desirable depending on the business use case. For example, if a canned good costs $1.00$ USD to stock and is sold for $1.50$ USD, then the opportunity cost of underestimating by 1 unit is *higher* than the opportunity cost of overestimating by 1 unit.
+
+# Data Preparation
+
+```{r}
+# Submission data asks us  to forecast 16 days ahead
+# from 8/15/2017 to 8/31/2017.
+# We do a train-test split so that the test set
+# is also exactly 16 days 
+train_test_split_date <- "2017-07-30"
+
+df_train <- df %>% 
+  filter(
+    date <= train_test_split_date
+  ) %>% 
+  filter(
+    # Jan 1 of each year has near 0 sales
+    # due to holiday event. For a simple naive aka random walk
+    # we treat this event as anomalous and remove it from 
+    # the data set to get more accurate generalization errors.
+    # If we are asked to forecast Jan 1., we will always forecast 0.
+    !(
+      month(date) == 1 & mday(date) == 1
+    )
+  ) %>% 
+  fill_gaps()
+
+df_test <- df %>% 
+  filter(
+    date > train_test_split_date
+  )
+
+h_length <- df_test %>% 
+  distinct(date) %>% 
+  pull() %>% 
+  length()
+```
+
+# Random Walk (aka Naive) Model
+
+We fit 1 naive model per combination of key variables: `family` x `store_nbr`.
+
+```{r}
+sales_naive_model <- model(
+  .data = df_train,
+  `Naive Model` = NAIVE(sales)
+)
+
+sales_naive_model
+```
+
+```{r, warning = FALSE, message = FALSE, fig.height = 10, fig.width = 8}
+sales_naive_model %>% 
+  filter(
+    family %in% c("GROCERY I", "BEVERAGES"),
+    store_nbr %in% c(44, 45)
+  ) %>% 
+  forecast(
+    h = h_length
+  ) %>% 
+  autoplot(
+    df_train %>% 
+      filter(date >= "2017-01-01") %>% 
+      bind_rows(df_test)
+  )
+```
+
+The forecast for the 2 largest categories and in the 2 largest stores. We see a consistent overestimate by the naive model, due to the final observation being at the peak of a seasonal cycle. Consequently, we can probably obtain a better model if we build in a seasonality component into our model specification.
+
+## Model Evaluation
+
+### Out-Of-Sample Error
+
+```{r}
+sales_naive_model %>% 
+  forecast(
+    h = h_length
+  ) %>% 
+  accuracy(
+    df_test
+  ) %>% 
+  filter(
+    is.finite(MAPE)
+  ) %>% 
+  arrange(
+    desc(MAPE)
+  ) %>% 
+  datatable()
+```
+
+The forecasts for `HOME AND KITCHEN II` sales in stores 48 and 35 seem particularly egregious.
+
+```{r}
+sales_naive_model %>% 
+  filter(
+    family == "HOME AND KITCHEN II",
+    store_nbr %in% c(35, 48)
+  ) %>% 
+  forecast(
+    h = h_length
+  ) %>% 
+  autoplot(
+    df %>% 
+      filter(
+        family == "HOME AND KITCHEN II",
+        store_nbr %in% c(35, 48),
+        date >= "2017-01-01"
+      )
+  )
+```
+
+The last observation in the training data for these two time series is an anomalous spike, leading to a severe overestimation. 
+
+```{r, warning=FALSE,fig.height = 20, fig.width = 10}
+df_train %>% 
+  filter(
+    date >= "2017-01-01",
+    family == "HOME AND KITCHEN II"
+  ) %>% 
+  ggplot(aes(date, sales)) + 
+  geom_line() + 
+  facet_wrap(~store_nbr, ncol = 3, scales = "free_y")
+```
+
+This spike on `HOME AND KITCHEN II` products on July 30th, 2017 seems to be unique to stores 48 and 35. We likely need to incorporate a smoothing method into our model specification.
+
+### Residual Diagnostics
+
+```{r, warning=FALSE, message=FALSE}
+sales_naive_model %>% 
+  filter(
+    family == "GROCERY I",
+    store_nbr == 44
+  ) %>% 
+  gg_tsresiduals()
+```
+
+The residuals don't exhibit any autocorrelation of lag 1, indicating that the residuals are not trended. However, we see systemic spikes in the autocorrelation plot at lags 7, 14, and 21, indicating a very strong weekly seasonal pattern.
+
+## Model Score
+
+We can estimate how our model scores w.r.t. to the evaluation criterion by computing the RMSLE on the holdout set:
+
+```{r}
+sales_naive_forecast <- sales_naive_model %>% 
+  forecast(
+    h = h_length
+  ) %>% 
+  as_tibble() %>% 
+  select(
+    family,
+    store_nbr,
+    date,
+    forecast = .mean
+  )
+
+sales_naive_forecast
+```
+
+```{r}
+df_test %>% 
+  as_tibble() %>% 
+  left_join(
+    sales_naive_forecast
+    ,
+    by = c("date", "family", "store_nbr")
+  ) %>% 
+  rmsle(
+    actuals = "sales",
+    forecast = "forecast"
+  )
+```
+
+---

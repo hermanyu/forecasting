@@ -1,0 +1,23 @@
+---
+title: "Store Sales - Time Series Forecasting"
+author: "Herman Yu"
+output:
+  rmdformats::downcute
+---
+
+# Introduction
+
+This project aims to produce forecasting models for the Kaggle competition: [Store Sales - Time Series Forecasting](https://www.kaggle.com/competitions/store-sales-time-series-forecasting/overview). The `fable` package is used extensively to build fit and evaluate forecasting models in R. Many of the analysis and modeling techniques used in this project are directly lifted from studying the online textbook [Forecasting: Principles and Practice](https://otexts.com/fpp3/) by Rob Hyndman and George Athanasopoulos.
+
+# Project Work
+
+1) [Summary Statistics](html/01-Summary-Statistics.html)
+2) [Time Series Features](html/02-Time-Series-Features.html)
+3) [Random Walk Model](html/03-Random-Walk-Model.html)
+4) [Time Series Decomposition Models](html/04-TS-Decomposition-Model.html)
+
+# References
+
+Hyndman, R., Athanasopoulos, G. [Forecasting: Principles and Practice (3rd Ed)](https://otexts.com/fpp3/)
+
+---

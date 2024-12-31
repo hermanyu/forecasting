@@ -1,0 +1,285 @@
+---
+title: "01: Summary Statistics"
+author: "Herman Yu"
+output:
+  rmdformats::downcute
+---
+
+# Setup
+```{r, warning=FALSE, message=FALSE}
+options(scipen=999)
+DATA_DIR <- Sys.getenv("DATA_DIR")
+DATA_PATH <- paste0(DATA_DIR, "/store-sales-time-series/train.csv")
+
+library(fpp3)
+library(readr)
+library(DT)
+library(scales)
+```
+
+```{r, warning=FALSE, message=FALSE}
+# load data
+df <- read_csv(DATA_PATH)
+
+df %>% 
+  head(10) %>% 
+  datatable()
+```
+
+
+# Data Integrity
+
+## Dimensions
+
+```{r}
+df %>% 
+  summarise(
+    num_rows = n(),
+    start_date = min(date),
+    end_date = max(date),
+    distinct_dates = n_distinct(date),
+    distinct_families = n_distinct(family),
+    distinct_stores = n_distinct(store_nbr)
+  ) %>% 
+  datatable()
+```
+
+The number of rows (3,000,888) exactly equals the product of 1,684 x 33 x 54; there is 1 row per unique combination of `date` x `family` x `store_nbr`.
+
+## Missing Values
+
+```{r}
+df %>% 
+  summarise(
+    na_dates = sum(is.na(date)),
+    na_family = sum(is.na(family)),
+    na_stores = sum(is.na(store_nbr))
+  )
+```
+
+## Gaps in Date Range
+
+```{r}
+tibble(
+  date = seq(ymd("2013-01-01"), ymd("2017-08-15"), by = "day")
+) %>% 
+  left_join(
+    df %>% 
+      select(
+        date
+      ) %>% 
+      mutate(
+        is_in_data = 1
+      )
+    ,
+    by = "date"
+  ) %>% 
+  filter(
+    is.na(is_in_data)
+  )
+```
+
+Christmas Day is not present in the data for all years.
+
+# Product Family
+
+```{r}
+family_list <- df %>% 
+  distinct(family) %>% 
+  pull()
+
+length(family_list)
+```
+
+## Time Series By Family
+
+```{r, fig.height = 15, fig.width = 10}
+df %>% 
+  group_by(date, family) %>% 
+  summarise(
+    sales = sum(sales),
+    .groups = "drop"
+  ) %>% 
+  ggplot(aes(date, sales)) + 
+  geom_line() + 
+  facet_wrap(~family, ncol = 3, scales = "free_y")
+```
+
+Notes:
+
+* Many product family always have 0 or near 0 sales on New Years.
+* Some product families only had sales starting from a certain point in time.
+* Frozen foods, groceries, home and kitchen, liquor/beer/wine show consistent spikes during the end of the year.
+* School supplies always spike in the Fall around August.
+
+## Summary Of Family Sales
+
+```{r}
+df %>% 
+  group_by(
+    family
+  ) %>% 
+  summarise(
+    total_sales = sum(sales),
+    avg_daily_sales = mean(sales),
+    days_on_promo = sum(onpromotion),
+    avg_days_on_promo = mean(onpromotion)
+  ) %>% 
+  arrange(
+    desc(total_sales)
+  ) %>% 
+  datatable()
+```
+
+```{r}
+df %>% 
+  filter(sales > 0) %>% 
+  group_by(family) %>% 
+  summarise(
+    begin_date = min(date)
+  ) %>% 
+  arrange(
+    desc(begin_date)
+  ) %>% 
+  datatable()
+```
+
+* Books sales volume. Books sales only start in October 2016.
+* 10 products only start sales in early 2014.
+* Remaining products all have sales in January 2013.
+
+## Sales Mix By Family
+
+```{r, fig.width = 12, fig.height = 5}
+df %>% 
+  group_by(date, family) %>% 
+  summarise(
+    sales = sum(sales),
+    .groups = "drop"
+  ) %>% 
+  group_by(date) %>% 
+  mutate(
+    sales_percent = sales/sum(sales)
+  ) %>% 
+  ungroup() %>% 
+  ggplot(aes(date, sales_percent, fill = as.factor(family))) + 
+  geom_area()
+```
+
+```{r}
+df %>% 
+  group_by(date, family) %>% 
+  summarise(
+    sales = sum(sales),
+    .groups = "drop"
+  ) %>% 
+  group_by(date) %>% 
+  mutate(
+    sales_percent = sales/sum(sales)
+  ) %>% 
+  ungroup() %>% 
+  mutate(
+    mean_sales_percent = mean(sales_percent)
+  ) %>% 
+  group_by(family) %>% 
+  summarise(
+    family_mix_stdev = sd(sales_percent),
+    max_dev = max(abs(sales_percent - mean_sales_percent)),
+    daily_sales = mean(sales)
+  ) %>% 
+  arrange(desc(family_mix_stdev)) %>% 
+  datatable()
+```
+
+
+# Stores
+
+## Time Series By Store
+
+```{r, fig.height = 20, fig.width = 10}
+df %>% 
+  group_by(date, store_nbr) %>% 
+  summarise(
+    sales = sum(sales),
+    .groups = "drop"
+  ) %>% 
+  ggplot(aes(date, sales)) + 
+  geom_line() + 
+  facet_wrap(~store_nbr, ncol = 3, scales = "free_y")
+```
+
+## Store Sales Summary
+
+```{r}
+df %>% 
+  group_by(store_nbr) %>% 
+  summarise(
+    total_sales = sum(sales),
+    avg_daily_sales = mean(sales),
+    days_on_promo = sum(onpromotion),
+    avg_days_on_promo = mean(onpromotion)
+  ) %>% 
+  arrange(
+    desc(total_sales)
+  ) %>% 
+  datatable()
+```
+
+```{r}
+df %>% 
+  filter(sales > 0) %>% 
+  group_by(store_nbr) %>% 
+  summarise(
+    begin_date = min(date)
+  ) %>% 
+  arrange(
+    desc(begin_date)
+  ) %>% 
+  datatable()
+```
+
+## Sales Mix By Store
+
+```{r, fig.width = 12, fig.height = 6}
+df %>% 
+  group_by(date, store_nbr) %>% 
+  summarise(
+    sales = sum(sales),
+    .groups = "drop"
+  ) %>% 
+  group_by(date) %>% 
+  mutate(
+    sales_percent = sales/sum(sales)
+  ) %>% 
+  ungroup() %>% 
+  ggplot(aes(date, sales_percent, fill = as.factor(store_nbr))) + 
+  geom_area()
+```
+
+
+```{r}
+df %>% 
+  group_by(date, store_nbr) %>% 
+  summarise(
+    sales = sum(sales),
+    .groups = "drop"
+  ) %>% 
+  group_by(date) %>% 
+  mutate(
+    sales_percent = sales/sum(sales)
+  ) %>% 
+  ungroup() %>% 
+  mutate(
+    mean_sales_percent = mean(sales_percent)
+  ) %>% 
+  group_by(store_nbr) %>% 
+  summarise(
+    store_mix_stdev = sd(sales_percent),
+    min_dev = max(abs(sales_percent - mean_sales_percent)),
+    daily_sales = mean(sales)
+  ) %>% 
+  arrange(desc(store_mix_stdev)) %>% 
+  datatable()
+```
+
+---
