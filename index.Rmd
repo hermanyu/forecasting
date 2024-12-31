@@ -21,6 +21,6 @@ output:
 
 # Projects
 
-1) [Kaggle Competition: Forecasting Store Sales](projects/store-sales-forecasting/project-store-sales-forecasting.html)
+1) [Kaggle Competition: Forecasting Store Sales](html/projects/store-sales-forecasting/project-store-sales-forecasting.html)
 
 ---
