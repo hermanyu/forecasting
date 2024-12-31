@@ -11,10 +11,10 @@ This project aims to produce forecasting models for the Kaggle competition: [Sto
 
 # Project Work
 
-1) [Summary Statistics](html/01-Summary-Statistics.html)
-2) [Time Series Features](html/02-Time-Series-Features.html)
-3) [Random Walk Model](html/03-Random-Walk-Model.html)
-4) [Time Series Decomposition Models](html/04-TS-Decomposition-Model.html)
+1) [Summary Statistics](01-Summary-Statistics.html)
+2) [Time Series Features](02-Time-Series-Features.html)
+3) [Random Walk Model](03-Random-Walk-Model.html)
+4) [Time Series Decomposition Models](04-TS-Decomposition-Model.html)
 
 # References
 
