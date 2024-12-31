@@ -1,0 +1,19 @@
+---
+title: "03: Exponential Smoothing (ETS)"
+author: "Herman Yu"
+output:
+  rmdformats::downcute
+---
+
+# Introduction
+
+For given time series $Y_t$, suppose we had an observed set of values $y_1, y_2,\ldots, y_{T-1}, y_T$. If we are trying to forecast $y_{T+1}$, it is generally the case that more recent values like $y_T$ will hold more information than distant values like $y_1$. Therefore, we would like a forecasting model that gives more weight to recent values and less weight to distant values. So one approach to building a forecasting model would be to take a weighted sum:
+
+$$
+\hat{y}_{T+1} := \sum_{t=1}^T w_t y_t
+$$
+
+where the weights $w_t$ decrease as $t\to 1$. This is the idea behind *exponential smoothing*, where the weights $w_t$ exponentially decay as $t\to 1$.
+
+
+# Simple Exponential Smoothing
