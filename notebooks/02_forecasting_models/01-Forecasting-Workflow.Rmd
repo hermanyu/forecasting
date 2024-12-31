@@ -1,0 +1,622 @@
+---
+title: "01: Forecasting Workflow"
+author: "Herman Yu"
+output:
+  rmdformats::downcute
+---
+
+# Introduction
+
+Forecasting involves using observed historical data to model the data generation process, then using the model to make predictions about future data. This section will discuss the general workflow for building models and generating forecasts. To ground the discussion, we will also introduce the most basic forecasting models and demonstrate how they flow through the general model building paradigm.
+
+# The Forecasting Workflow
+
+The basic workflow for building a forecasting model is this:
+
+1) Gather and prepare the data on the quantity of interest.
+2) Explore and visualize data to deduce the general nature of the data generation process.
+3) Specify a model of the DGP which is reasonable w.r.t. to the exploratory data analysis.
+4) Fit the specified model onto the observed data.
+5) Evaluate the model and diagnose any potential errors or weaknesses. If the model needs to be improved, return to Step 2.
+6) Forecast future values using the model.
+
+To ground this discussion, we use a *linear trends* model to forecast the gross domestic product (GDP) of various countries.
+
+# Step 1: Data Preparation
+
+In order to forecast the GDP of each country, we first must get historical data on each country's GDP. This data has been collected for us in the `global_economy` data set.
+
+```{r, warning=FALSE, message=FALSE}
+library(fpp3)
+library(DT)
+
+global_economy %>% 
+  head(10) %>% 
+  datatable()
+```
+
+First, we should check the dimensions of our data set. 
+
+```{r}
+global_economy %>% 
+  as_tibble() %>% 
+  group_by(Country) %>% 
+  summarise(
+    start_year = min(Year),
+    end_year = max(Year),
+    record_count = n()
+  ) %>% 
+  datatable()
+```
+
+The data set contains 263 countries, although `Country = 'World'` probably doesn't correspond to a single country (but the entire world). All the countries start at 1960 and end at 2017 *except* for Eritrea which ends in 2011.
+
+```{r}
+global_economy %>% 
+  as_tibble() %>% 
+  summarise(
+    year_na_count = sum(is.na(Year)),
+    GDP_na_count = sum(is.na(GDP)),
+    Population_na_count = sum(is.na(Population))
+  ) %>% 
+  datatable()
+```
+
+There are 3,322 rows with a missing `GDP` value and 3 rows with a missing `Population` value. Let's take a look now:
+
+```{r}
+global_economy %>% 
+  filter(
+    is.na(Population)
+  ) %>% 
+  datatable()
+```
+
+Kuwait is missing population values for 1992, 1993, and 1994.
+
+```{r}
+global_economy %>% 
+  filter(
+    is.na(GDP)
+  ) %>% 
+  as_tibble() %>% 
+  group_by(Country) %>% 
+  summarise(
+    count = n()
+  ) %>% 
+  arrange(desc(count)) %>% 
+  datatable()
+```
+
+139 countries are missing a GDP value at some point in time, with British Virgin Islands, Curacao, Gibraltar, North Korea, St. Martin, and Turks and Caicos Islands missing GDP values for all years.
+
+Note that *gross* domestic product is net measure of a nation's economic output (measured in USD). Economic theory tells us that nations with a larger labor force will tend to have a higher GDP; the more people that work, the more "stuff" gets made. Therefore, forecasting a nation's GDP will require us to first forecast that nation's population. We can resolve this obstacle by moving the goalposts a little bit: rather than forecasting GDP, we instead forecast the normalized quantity *GDP per capita*. This quantity removes the influence of population size and simplifies the data generation process.
+
+So to prepare the data, we will create a new variable `GDP_per_capita` and split the data into a training set and validation set. The training set is used to fit the proposed model, while the validation set is used to evaluate how the model behaves on unseen data. We'll use 1960 to 2010 as the training set and 2011 to 2017 as the validation set.
+
+```{r}
+# prepare data by creating by augmenting GDP
+# to GDP per capita and doing a train-test split
+gdppc_training <- global_economy %>% 
+  filter(Year <= 2010) %>% 
+  mutate(
+    GDP_per_capita = GDP / Population
+  )
+
+gdppc_validation <- global_economy %>% 
+  filter(Year > 2010) %>% 
+  mutate(
+    GDP_per_capita = GDP / Population
+  )
+```
+
+
+# Step 2: Exploratory Data Analysis
+
+We can use economic theory to make hypotheses about GDP per capita, but we will need to validate these hypotheses by checking the data. If the data seems to align with the hypotheses, that provides evidence for including these assumptions in the model. If the data contradicts the predictions made by economic theory, that might indicate an unknown variable that we must go back and account for.
+
+For example, economic theory tells us that GDP should be an increasing function w.r.t. to Labor and Capital. Labor is correlated with population size, so we can begin by plotting GDP vs Population on a scatterplot.
+
+```{r, warning=FALSE}
+gdppc_training %>% 
+  filter(
+    Country != "World"
+  ) %>% 
+  mutate(
+    Grouping = ifelse(Country == "United States", "US", "Not US")
+  ) %>% 
+  as_tibble() %>% 
+  ggplot(aes(Population, GDP, color = Grouping)) + 
+  geom_point()
+```
+
+The shape of the plot is interesting: we do in fact see a positive relationship between GDP vs Population, but it there are a number of subsets of points which group together to form their own line. This is likely reflecting the fact that the strength of the correlation between GDP vs Population is different for each individual country.
+
+GDP should also increase w.r.t. to technological innovations. Technology is correlated with time, so we can investigate this hypothesis by plotting GDP vs Year:
+
+```{r, warning=FALSE}
+gdppc_training %>% 
+  filter(
+    Country != "World"
+  ) %>% 
+  mutate(
+    Grouping = ifelse(Country == "United States", "US", "Not US")
+  ) %>% 
+  as_tibble() %>% 
+  ggplot(aes(Year, GDP, color = Grouping)) + 
+  geom_point()
+```
+
+Let's consider what happens when we normalize GDP by Population:
+
+```{r, warning = FALSE}
+gdppc_training %>% 
+  filter(
+    Country != "World"
+  ) %>% 
+  mutate(
+    Grouping = ifelse(Country == "United States", "US", "Not US")
+  ) %>% 
+  as_tibble() %>% 
+  ggplot(aes(Year, GDP_per_capita, color = Grouping)) + 
+  geom_point()
+```
+
+We see that GDP per capital generally increases from 1960 to 2017 and follows an exponential curve (which likely reflects GDP increases due to technology). Starting from approximately 1975, the GDP per capita of the United States exhibits a roughly linear trend. Consequently, we suspect that a linear trend model might make sense here.
+
+# Step 3: Specifying A Model
+
+The EDA from the previous section revealed that a linear trend model might be appropriate for fitting the data. Specifically, we hypothesize that the data generation process for the $i$-th country is:
+
+$$
+Y_{i,t} = (\beta_{i,0} + \beta_{i,1} t) + \epsilon_i
+$$
+
+where $\epsilon$ is a random variable with $E[\epsilon \,\,|\,\,t] = 0$. In other words, we are hypothesizing that each country's GDP per capita follows a unique linear trend and the scale of the random noise is possible distinct for each country.
+
+The `fable` package comes equipped with a variety of model objects we can use to specify our forecasting model. To specify a linear trend model, we use the `TSLM()` function from `fable`:
+
+```{r}
+# The TSLM() function creates an R6 "mdl_defn" object which specifies a 
+# linear trend model. The special trend() function 
+# is used to represent the trend dimension.
+gdppc_linear_trend_spec <- TSLM( GDP_per_capita ~ trend() )
+
+class(gdppc_linear_trend_spec)
+```
+
+Note that a linear trend model does not require observations at each point in time; a line of best fit can be estimated even if there are gaps in the middle. This means that NA values can be handled by simply removing them from the data set.
+
+# Step 4: Fitting The Model
+
+Once the model is specified as a `mdl_defn` object, we can fit the model using the `model()` function from the `fable` package:
+
+```{r}
+# Fit a linear trend model to the observed data
+# using the model() function from fable. 
+# This returns a "mable" object (short for "modeling table")
+gdppc_fitted_model <- model(
+  # training data; the NA values are removed
+  .data = gdppc_training %>% 
+    filter(
+      Year >= 1975,
+      !is.na(GDP_per_capita)
+    )
+  ,
+  # model specification
+  gdppc_linear_trend_spec
+)
+
+# "mable" object
+gdppc_fitted_model
+```
+
+The `mable` object stores all the data for the fitted models. Each row corresponds to a model fitted onto a specific combination of key variables. In our case, `Country` was the only key variable, so the `mable` object contains 1 linear trend model fitted for each country.
+
+
+# Step 5: Evaluate The Model (Residual Diagnostics)
+
+Recall that our model specification is:
+
+$$
+Y_t = (\beta_0 + \beta_1 t) + \epsilon
+$$
+
+Evaluating our model requires thus amounts to answering two questions:
+
+1) How good are the model's point estimates for future data? Specifically, what is the expected *out-of-sample* error? 
+  * This is really a question about our model's deterministic component $\beta_0 + \beta_1 t$.
+2) What are the prediction intervals (aka "margins of error") for our predictions? 
+  * This is really a question about our model's random error component $\epsilon$.
+
+To simplify this discussion, let us focus on evaluating the forecasting model fitted for the United States. A natural place to start our investigation is by looking at our model's prediction errors. Formally, define the **residuals** $e_t$ of the model as:
+
+$$
+e_t := y_t - \hat{y}_t = y_t - (\hat{\beta_0} + \hat{\beta_1}t)
+$$
+
+where $y_t$ denotes the actual GDP per capita of the United States and $\hat{y_t}$ denotes the model's estimate for GDP per capita of the United States. From the structure of our hypothesized DGP 
+
+$$
+\begin{align*}
+Y_t &= \beta_0 + \beta_1 t + \epsilon\\
+Y_t - (\beta_0 + \beta_1 t) &= \epsilon
+\end{align*}
+$$
+
+we can see that the residuals $e_t = y_t - y_t - (\hat{\beta_0} + \hat{\beta_1}t)$ form an approximate sample of values from the distribution of the error term $\epsilon$. We can compute the residual values of the fitted model using the `augment()` function from `fabletools`. This returns a `tsibble` with 1 record per model per time point in the training data. To get the residuals for the United States model, we filter to `Country == "United States"`:
+
+```{r}
+us_residuals <- augment(gdppc_fitted_model) %>% 
+  filter(Country == "United States") 
+
+us_residuals %>% 
+  datatable()
+```
+
+
+## Out Of Sample Error
+
+A model's **out-of-sample error** or **generalization error** is the expected value of the residual term $e_t$ for any given future time $t > T$. Since we don't actually have any future data to compute $e_t = y_t - \hat{y}_t$ for $t >T$, we have to *simulate* how the model behaves by artificially creating a "future" data set. Recall that we partitioned our model to train on data from 1960 to 2010. Therefore, data from 2011 to 2017 is considered "future data" from the model's perspective.
+
+We first ask the model to forecast the GDP per capita from 2011 to 2017. This can be done by calling the `forecast()` function (from the `fabletools` package) on the `mable` object:
+
+```{r}
+# Generate a forecast from 2011 to 2017 (h = 7 years into the future).
+# This returns a "fable" object (short for "forecast table").
+gdppc_forecast <- forecast(
+  gdppc_fitted_model # mable object we got from fitting the model
+  ,
+  h = 7
+)
+
+gdppc_forecast %>% 
+  head(10)
+```
+
+Notice in particular that the forecast returns an *entire normal distribution* for the `GDP_per_capita` variable; this gives us both a point estimate (the mean) as well as prediction intervals. We can compare the model's forecasted value against the actual observed values using the `accuracy()` function from the `fabletools` package:
+
+```{r, warning = FALSE}
+accuracy(
+  gdppc_forecast, 
+  gdppc_validation %>% 
+    filter(!is.na(GDP_per_capita))
+) %>% 
+  as_tibble() %>% 
+  head(20) %>% 
+  datatable()
+```
+
+For the United States specifically, we get:
+
+```{r}
+accuracy(
+  gdppc_forecast %>% 
+    filter(
+      Country == "United States"
+    )
+  , 
+  gdppc_validation %>% 
+    filter(!is.na(GDP_per_capita))
+) %>% 
+  as_tibble() %>% 
+  datatable()
+```
+
+### Scale Dependent Metrics
+
+The **mean squared error (MSE)** is the sum of squared residuals on the simulated future data set:
+
+$$
+MSE := \text{mean}\left( \{ e_t^2 \,\,|\,\, t=2011,2012,\ldots, 2017 \}  \right)
+$$
+
+More accurate models will generally have smaller $e_t$ leading to a lower MSE. One drawback of MSE is that the units are squared (e.g. GDP per capita squared), making MSE hard to interpret. We can augment the MSE metric by looking at the **root mean squared error (RMSE)**:
+
+$$
+RMSE := \sqrt{MSE}
+$$
+
+The RMSE has the benefit of being in the original units (e.g. GDP per capita), making it easier to interpret. Another drawback of both MSE and RMSE is that both are sensitive to outlier values. If an anomalous value exists in the testing data set, the MSE and RMSE will be particularly large. This may or may not be desirable (depending on the nature of the anomalous data point), so an alternative metric we can use is the **mean absolute error (MAE)**:
+
+$$
+MAE := \text{mean}\left( \{ |e_t| \,\,|\,\, t=2011,2012,\ldots, 2017 \}  \right)
+$$
+
+One issue shared by MSE, RMSE, and MAE is *scale dependence*. For example, let's compare the MAE for two different countries: the United States and Fiji.
+
+```{r}
+accuracy(
+  gdppc_forecast %>% 
+    filter(
+      Country %in% c("United States", "Fiji")
+    )
+  , 
+  gdppc_validation %>% 
+    filter(!is.na(GDP_per_capita))
+)
+```
+
+We might be tempted to compare the MAE of these two models and conclude that both models have roughly the same accuracy. But consider the actual data
+
+```{r}
+gdppc_validation %>% 
+  filter(
+      Country %in% c("United States", "Fiji")
+  ) %>% 
+  as_tibble() %>% 
+  ggplot(aes(x = Year, y = GDP_per_capita)) + 
+  geom_line() + 
+  facet_wrap(~Country, ncol = 1, scales = "free_y")
+```
+
+On our validation data set, the GDP per capita of the United States ranges from $50,000$ to $60,000$, so an average prediction error of $1,110$ means our point estimate is off by an average of about 2 percent (not bad). On the other hand, the GDP per capita of Fiji ranges from $4,400$ to $5,600$, so an average prediction error of $1,135$ means our point estimate is off by an average of 23 percent (pretty bad...). Thus, it is impossible to compare MSE, RMSE, or MAE of models across different groups of data points, because these metrics depend on the scale underlying data.
+
+### Percentage Errors
+
+If we wish to compare the model's accuracy for different countries, we need to normalize the accuracy metrics by the scale of the original data set. The **mean absolute percentage error (MAPE)** is defined as:
+
+$$
+MAPE := \text{mean}\left( \left\{ 100\cdot \left|\frac{e_t}{y_t}\right| \,\,\middle|\,\, t=2011,2012,\ldots, 2017 \right \}  \right)
+$$
+
+The MAPE is scale independent, so it becomes possible to compare the MAPE = 1.97 of the United States with the MAPE = 22.9 of Fiji. However, MAPE does have a few drawbacks:
+
+1) MAPE will be undefined whenever $y_t = 0$. This can be particularly troublesome if the response variable $Y_t$ can take on positive or negative values (e.g. inflation).
+2) MAPE is interpretable only if the response variable $Y_t$ has a meaningful 0. 
+  * For example if $Y_t$ measures the temperature in degrees Celsius, then $Y_t = 0$ does not mean the absence of any heat since 0 C = 273 K. If the model predicts a temperature of 2 C while the actual value is 1 C, the MAPE will be 100 even though 2 C is not actually twice as hot as 1 C.
+3) MAPE penalizes overestimates (negative residuals) more heavily than underestimates (positive residuals). 
+  * For example, suppose the actual value of the response variable is $y_t = 2$. 
+  * If the model underestimates by 1 unit, say $\hat{y}_t = 1$, then the absolute percentage error would be $50$ (i.e. the forecast $\hat{y}_t = 1$ is 50 percent of $y_t = 2$). 
+  * On the other hand if the model overestimates by 1 unit, say $\hat{y}_t = 3$, then the absolute percentage error would be $150$ (i.e. the forecast $\hat{y}_t = 3$ is 150 percent of $y_t = 2$.)
+  * Therefore, underestimating by 1 unit will always yield a lower MAPE than overestimating by 1 unit. Intuitively, the absolute percentages are bounded below by 0 so underestimates get "squished" down to fit into interval $(0, 1)$. On the other hand, percentages are unbounded above, so no such squishing has to occur for overestimates.
+  
+An alternative is to take the residuals $e_t$ on the testing data set and scale them by the *training* MAE. Formally, the **scaled residuals** or **scaled errors** are defined as:
+
+$$
+q_j := \frac{e_j}{\text{mean}\left( \{|e_t| \,\,\middle|\,\, t=1,\ldots, T_{train}\} \right)} \qquad \forall j > T_{train}
+$$
+
+The idea is that the scale of the numerator $e_j$ is now cancelled out by the scale of the denominator. Intuitively, $q_j$ measures "how much worse" is at predicting the test point $y_j$ compared to its average performance on the training data. The corresponding metrics **mean absolute scaled error (MASE)** and **root mean squared scaled error (RMSSE)** are defined as follows:
+
+$$
+MASE := \text{mean}(\{|q_j|\,\,|\,\, t=T_{train} + 1,\ldots, T \})\\
+RMSSE := \sqrt{\text{mean}(\{ (q_j)^2\,\,|\,\, t=T_{train} + 1,\ldots, T \})}
+$$
+
+### Diagnosing The Deterministic Component
+
+Computing the various out-of-sample error tells us how the model is performing. The natural follow-up question is: can the model be improved? One possible avenue for improving a model is by considering the behavior of the residuals, specifically the quantity $E[\epsilon_t \,\,|\,\,t]$. If there is any predictable pattern within the residuals, then that pattern can be extracted and used by the deterministic piece to get a more accurate forecast. 
+
+Formally, suppose that our model specification is:
+
+$$
+Y_t = f(t) + \epsilon_t
+$$
+
+If $E[\epsilon_t \,\,|\,\,t] \neq 0$, then we can further decompose $\epsilon_t$ into:
+
+$$
+\epsilon_t = \mu_{\epsilon}(t) + \tilde{\epsilon}_t 
+$$
+
+where $\mu_{\epsilon}(t) := E[\epsilon_t\,\,|\,\,t]$ and $E[\tilde{\epsilon}_t \,\,|\,\,t]= 0$. We can then obtain a more accurate model by adjusting our original specification:
+
+$$
+\begin{align*}
+Y_t &= f(t) + \epsilon_t\\
+&= (f(t) + \mu_{\epsilon}(t)) + \tilde{\epsilon}_t\\
+&= \tilde{f}(t) + \tilde{\epsilon}_t
+\end{align*}
+$$
+
+where $\tilde{f}(t) := f(t) + \mu(t)$. In other words, if $E[\epsilon\,\,|\,\,] \neq 0$, then the deterministic piece $f(t)$ can always be adjusted to $\tilde{f}(t)$ to yield a more accurate model. In machine learning parlance, if $Y_t = f(t) + \epsilon_t$ with $E[\epsilon_t\,\,|\,\,]\neq 0$, then the model $f(t)$ is **biased** or **underfitting** because $f(t) \neq E[Y_t\,\,|\,\,t]$.
+
+Returning to our example of United States GDP per capita, our fitted model yields residuals of the form:
+
+```{r}
+us_residuals %>% 
+  autoplot(.resid)
+```
+
+We notice that there is a pattern within the residuals, specifically a parabolic shape from 1975 to 2010. Based on the plot, we have some evidence to say that $E[Y_t - (\beta_0 - \beta_1)t \,\,|\,\,] \neq 0$, suggesting that our deterministic piece is "missing something" (specifically the parabolic pattern). 
+
+The residual plot above shows that the residuals seem to be correlated across time: when the model underestimates the GDP per capita in a given year $t$, it tends to also underestimate the GDP per capita for the next few years $t+1$, $t+2$, and $t+3$. So if the model underestimates at year $t$, we can immediate use that information and increase the estimate for $t+1$ to get a more accurate forecast. Heuristically, there is a deterministic pattern that is not being captured by our deterministic piece $\beta_0 + \beta_1 t$.
+
+Formally, the residuals exhibit *autocorrelation*, indicating a pattern that is being missed by the deterministic component of the model. We can quantify the severity of this autocorrelation by looking at the ACF plot for the residuals:
+
+```{r}
+us_residuals %>% 
+  ACF(.resid) %>% 
+  autoplot()
+```
+
+This indicates that our deterministic component $\beta_0 + \beta_1 t$ is not the correct model for US GDP per capita as a function of time. If we wanted to improve the model, we would return back to Step 2 and investigate how we can adjust the deterministic piece $f(t)$ to yield a better model.
+
+## Prediction Intervals
+
+A model's prediction interval is a statement about the the random error term $\epsilon$. Therefore, generating a prediction interval requires us to model the error term $\epsilon$. Recall our original model specification:
+
+$$
+Y_{t} = (\beta_{0} + \beta_{1}t) + \epsilon
+$$
+
+Assuming that we have $E[\epsilon\,\,|\,\,t] = 0$, the deterministic piece will generate a good point estimate $\hat{y}_t$. However, the existence of the random error term $\epsilon$ implies that the actual value $y_t$ will randomly deviate from our prediction $\hat{y}_t$ according to the distribution of $\epsilon$. Therefore the natural question we need to answer is: what is the distribution of $\epsilon$?
+
+Assuming the deterministic piece $\hat{f}(t) = \hat{y}_t$ is a sufficiently accurate estimate for $f(t) = E[Y_t\,\,|\,\,t]$, the residual
+
+$$
+e_t = y_t - \hat{y}_t
+$$
+
+will approximately follow the same distribution as the random error term $\epsilon_t$. 
+
+Unfortunately, we only have a single observation $e_t$ for $\epsilon_t$ for each time $t$. In order to proceed, we have to make a simplifying assumption: the $\epsilon_t$ are i.i.d. This assumption implies the following a very specific property: $Var[\epsilon_t\,\,|\,\,t] = \sigma$ for all $t$. In particular, the residuals $e_t$ must be **homoscedastic** w.r.t. to time. Note that homoscedasticity of the residuals is necessary *but not sufficient* to guarantee i.i.d. of the $\epsilon_t$; we still need to assume that the $\epsilon_t$ follow the same distribution (e.g. are all normal).
+
+Assuming that the $\epsilon_t$ are i.i.d. allows us to treat the residuals $e_t$ as a sample of a single random variable $\epsilon_t = \epsilon$. Therefore, the most natural thing to do is plot a histogram for the residuals:
+
+```{r, warning=FALSE, message=FALSE}
+us_residuals %>% 
+  as_tibble() %>% 
+  ggplot(aes(.resid)) + 
+  geom_histogram() + 
+  labs(title = "Residuals (US GDP Per Capita)")
+```
+
+Two possible scenarios now arise:
+
+1) The residuals approximately follow a known parametric distribution (e.g. a normal distribution). In this case, we can use maximum likelihood estimation on the residuals to fit an explicit distribution for $\epsilon$.
+
+2) The residuals do not follow a known parametric distribution. In this case, we estimate the distribution of the residuals using a non-parametric bootstrapping approach.
+
+### Normal Residuals
+
+We can start by checking of the residuals approximately follow a normal distribution. One approach is to generate a QQ-plot:
+
+```{r}
+us_residuals %>% 
+  as_tibble() %>% 
+  ggplot(aes(sample = .resid)) + 
+  geom_qq() + 
+  geom_qq_line() + 
+  labs(title = "Normal QQ-Plot (Residuals)")
+```
+
+If we accept that this QQ-plot is "sufficiently normal", then we declare $e_t = \epsilon \sim N(0, \sigma)$ for all $t$. We will need to estimate the variance $\sigma^2$ using the sample variance of the residuals:
+
+$$
+\hat{\sigma}^2 := \text{mean}(\{(e_t)^2\,\,|\,\, t = 1,\ldots, T\})
+$$
+
+where we are using the fact that $E[e_t] = 0$. The corresponding statistic:
+
+$$
+\frac{y_{T + 1} - \hat{y}_{T + 1}}{\hat{\sigma}}
+$$
+
+will follow a $t$-distribution which can then be used to generate a 95% prediction interval for $y_{T+1}$. Note that for further time steps $T+1, T+2,\ldots$ the computation of the prediction intervals is more complicated because the intervals will get larger as we progress in time. In other words: forecasts become more uncertain the further ahead we go.
+
+### Bootstrapping
+
+Instead of assuming a known parametric distribution for $\epsilon$, we can attempt to estimate the distribution of $\epsilon$. **Bootstrapping** is the process of using the observed distribution of the sample (i.e. the observed residuals) as literal distribution of $\epsilon$. We can then sample the observed residuals to estimate quantiles for $\epsilon$, thereby generating the prediction interval.
+
+```{r}
+# simulate 10 bootstrap sample predictions
+# using the generate() function
+gdppc_fitted_model %>% 
+  filter(
+    Country == "United States"
+  ) %>% 
+  generate(h = 7, times = 10, bootstrap = TRUE) %>% 
+  autoplot(.sim)
+```
+
+Prediction intervals can be generating many bootstrapped samples of the residuals to simulate many potential forecasts. All of this is handled by the `forecast()` method implicitly if we specify the argument `bootstrap = TRUE`:
+
+```{r}
+gdppc_fitted_model %>% 
+  filter(
+    Country == "United States"
+  ) %>% 
+  forecast(
+    h = 7,
+    bootstrap = TRUE
+  )
+```
+
+Notice the normal distribution in the `GDP_per_capita` column has been replaced by a `sample[5000]` distribution, indicating a distribution of 5000 bootstrapped samples.
+
+```{r}
+gdppc_fitted_model %>% 
+  filter(
+    Country == "United States"
+  ) %>% 
+  forecast(
+    h = 7,
+    bootstrap = TRUE
+  ) %>% 
+  autoplot()
+```
+
+We can get the actual numerical values for the intervals using the `hilo()` function from `fable`:
+
+```{r}
+# The hilo() function from fable takes
+# a fable object as input and returns the prediction intervals
+# for the forecast as a table
+gdppc_fitted_model %>% 
+  filter(
+    Country == "United States"
+  ) %>% 
+  forecast(h = 10) %>% 
+  hilo()
+```
+
+Notice in particular that the prediction intervals shift according to the point estimate and get slighly larger with each future time step.
+
+### Evaluating Prediction Intervals
+
+Once a method for generating the prediction intervals has been decided upon, the next step is to evaluate how accurate the prediction intervals are. Prediction intervals are statements of the form: "The actual value will fall within the prediction interval x% of the time". We can validate such statements by checking whether fitting a model on a training set, generating prediction intervals on a validation set, and observing if the values of the validation set fall within the prediction intervals as expected.
+
+```{r}
+gdppc_fitted_model %>% 
+  filter(
+    Country == "United States"
+  ) %>% 
+  forecast(
+    h = 7,
+    bootstrap = TRUE
+  ) %>% 
+  autoplot(
+    bind_rows(
+      gdppc_training,
+      gdppc_validation
+    )
+  ) + 
+  labs(title = "US GDP Per Capita (Forecast vs Actuals)")
+  
+```
+
+The generated prediction intervals for the US model does capture the actual values at least 95% time (although we see a divergent behavior indicating bias).
+
+# Step 6: Forecasting Future Values
+
+Let's suppose that our model is considered acceptable. We then want to use it to generate an actual forecast for values truly in the future. Suppose we wanted to generate a forecast for United States GDP per capita from 2018 to 2024. To do this, we re-fit the model on the full data set  from 1960 to 2017:
+
+```{r}
+gdppc <- gdppc_training %>%
+    bind_rows(gdppc_validation)
+
+gdppc_final_fitted_model <- model(
+  .data = gdppc %>% 
+    filter(
+      Year >= 1975,
+      !is.na(GDP_per_capita)
+    )
+  ,
+  gdppc_linear_trend_spec
+)
+```
+
+Since a `mable` object represents a "table of models", it can be filtered like a regular table to isolate the specific models of interest. We can then cal the `forecast()` function on our filtered `mable` object to generate the desired forecast for United States GDP per capita:
+
+```{r}
+us_gdppc_forecast <- forecast(
+  gdppc_final_fitted_model %>% 
+    filter(Country == "United States")
+  , 
+  h = 7,
+  bootstrap = TRUE
+)
+
+us_gdppc_forecast
+```
+
+```{r}
+us_gdppc_forecast %>% 
+  autoplot(gdppc)
+```
+
+The blue section of the plot represents the forecast, with the corresponding 80% and 95% prediction intervals (generated from the normal distribution seen in the `fable` object).
+
+---

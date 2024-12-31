@@ -1,0 +1,307 @@
+---
+title: "02: Time Series Features"
+author: "Herman Yu"
+output:
+  rmdformats::downcute
+---
+
+# Setup
+
+## Libraries and Global Variables
+
+```{r, warning=FALSE, message=FALSE}
+options(scipen=999)
+DATA_DIR <- Sys.getenv("DATA_DIR")
+DATA_PATH <- paste0(DATA_DIR, "/store-sales-time-series/train.csv")
+
+library(fpp3)
+library(readr)
+library(DT)
+library(scales)
+```
+
+## Load Data
+```{r, warning=FALSE, message=FALSE}
+# The store sales data set has 1 record
+# per date x family x store_nbr.
+df <- read_csv(DATA_PATH) %>% 
+  as_tsibble(
+    key = c(family, store_nbr),
+    index = date
+  ) %>% 
+  select(
+    -c(
+      id
+    )
+  )
+```
+
+```{r, message=FALSE, warning=FALSE}
+# check how many days into future we need to forecast
+# for the test data set
+df_submit <- read_csv(paste0(DATA_DIR, "/store-sales-time-series/test.csv")) 
+
+df_submit %>% 
+  summarise(
+    start_date = min(date),
+    end_date = max(date)
+  )
+```
+
+# Data Preparation
+
+```{r}
+# Submission data asks us  to forecast 16 days ahead
+# from 8/15/2017 to 8/31/2017.
+# We do a train-test split so that the test set
+# is also exactly 16 days 
+train_test_split_date <- "2017-07-30"
+
+df_train <- df %>% 
+  filter(
+    date <= train_test_split_date
+  ) %>% 
+  fill_gaps(sales = 0)
+
+df_test <- df %>% 
+  filter(
+    date > train_test_split_date
+  )
+
+h_length <- df_test %>% 
+  distinct(date) %>% 
+  pull() %>% 
+  length()
+```
+
+# Autocorrelations
+
+## By Family
+
+Certain families only start having sales numbers after a certain date in time. For these families, the leading 0's in the `sales` variable will cause seasonal autocorrelations of be severly overestimated. The easiest solution is to filter down to a smaller time frame, say 2017-01-01 onward. This restriction will prevent us from observing any yearly patterns, but should highlight any weekly and monthly patterns.
+
+```{r, warning = FALSE, message=FALSE, fig.height = 15, fig.width = 12}
+df_train %>% 
+  filter(
+    date >= "2017-01-01"
+  ) %>% 
+  group_by(family) %>% 
+  summarise(
+    sales = sum(sales)
+  ) %>% 
+  ACF(sales, lag_max = 32) %>% 
+  autoplot() + 
+  facet_wrap(~family, ncol = 3, scales = "free_y")
+```
+
+Notes:
+* Most family shows significant correlation with lag 1.
+* Certain families show significant correlation with all lags; this indicates the existence of a trend for these families.
+* Almost every family shows a spike in correlation at lag 7, indicating a weekly seasonality. The only exception is Frozen Foods
+
+## By Store
+
+```{r, warning = FALSE, message=FALSE, fig.height = 20, fig.width = 12}
+df_train %>% 
+  filter(date >= "2017-01-01") %>% 
+  group_by(store_nbr) %>% 
+  summarise(
+    sales = sum(sales)
+  ) %>% 
+  ACF(sales) %>% 
+  autoplot() + 
+  facet_wrap(~store_nbr, ncol = 3, scales = "free_y")
+```
+
+Notes:
+* Store sales exhibit the same autocorrelation behavior as products. This indicates that sales generally are trended with heavy weekly seasonality.
+
+# Trends
+
+## By Family
+
+### Linear Trends
+
+```{r, warning = FALSE, message=FALSE, fig.height = 15, fig.width = 12}
+df_train %>% 
+  filter(
+    date >= "2017-01-01"
+  ) %>% 
+  group_by(family) %>% 
+  summarise(
+    sales = sum(sales)
+  ) %>% 
+  as_tibble() %>% 
+  ggplot(aes(date, sales)) + 
+  geom_line() + 
+  geom_smooth(method = lm, se = FALSE) + 
+  facet_wrap(~family, ncol = 3, scales = "free_y")
+```
+
+Notes:
+* Many families seem relatively stationary with little trend.
+* Books seem to follow an exponentially decaying trend.
+* Home Appliances seem to have a quadratic trend.
+* School supplies seem to have a relatively flat trend, but is skewed by a sudden increase near the end of July (likely due to back-to-school shopping).
+
+### Moving Average Window (KNN)
+
+Alternatively, we can fit a non-linear trend using a moving average window of size $k$; this is equivalent to $k$-nearest neighbors. Since moving average windows fit on local neighborhoods, this method is will not be severely biased by the leading 0's in the time series (so no need to filter).
+
+```{r, warning = FALSE, message=FALSE, fig.height = 15, fig.width = 12}
+window_margin = 30
+
+df_train %>% 
+  group_by(family) %>% 
+  summarise(
+    sales = sum(sales)
+  ) %>% 
+  group_by(family) %>% 
+  mutate(
+    trend_est = slider::slide_dbl(
+      .x = sales,
+      .f = mean,
+      .before = window_margin,
+      .after = window_margin
+    )
+  ) %>% 
+  ungroup() %>% 
+  as_tibble() %>% 
+  ggplot(aes(date, sales)) + 
+  geom_line() + 
+  geom_line(aes(y = trend_est), color = "blue") + 
+  facet_wrap(~family, ncol = 3, scales = "free_y")
+```
+
+## By Store
+
+### Linear Trends
+
+```{r, warning = FALSE, message=FALSE, fig.height = 20, fig.width = 12}
+df_train %>% 
+  filter(
+    date >= "2017-01-01"
+  ) %>% 
+  group_by(store_nbr) %>% 
+  summarise(
+    sales = sum(sales)
+  ) %>% 
+  as_tibble() %>% 
+  ggplot(aes(date, sales)) + 
+  geom_line() + 
+  geom_smooth(method = lm, se = FALSE) + 
+  facet_wrap(~store_nbr, ncol = 3, scales = "free_y")
+```
+
+Notes:
+* Trends for stores are relatively flat. Store 52 has leading zeros from January 2017 through April 2017, which is skewing the trend line up.
+
+### Moving Average Window (KNN)
+
+```{r, warning = FALSE, message=FALSE, fig.height = 15, fig.width = 12}
+window_margin = 30
+
+df_train %>% 
+  group_by(store_nbr) %>% 
+  summarise(
+    sales = sum(sales)
+  ) %>% 
+  group_by(store_nbr) %>% 
+  mutate(
+    trend_est = slider::slide_dbl(
+      .x = sales,
+      .f = mean,
+      .before = window_margin,
+      .after = window_margin
+    )
+  ) %>% 
+  ungroup() %>% 
+  as_tibble() %>% 
+  ggplot(aes(date, sales)) + 
+  geom_line() + 
+  geom_line(aes(y = trend_est), color = "blue") + 
+  facet_wrap(~store_nbr, ncol = 3, scales = "free_y")
+```
+
+
+# Seasonality
+
+## By Family
+
+We start by de-trending each time series by first estimating the trend via a moving average window. The autocorrelation plot of the resulting de-trended series should indicate the presence of seasonal patterns.
+
+```{r, warning = FALSE, message=FALSE, fig.height = 15, fig.width = 14}
+# window size used for de-trending should be
+# equal to the periodicity of 
+# the hypothesized seasonal pattern;
+# since we suspect weekly seasonality, the window
+# should be t-3, ..., t, ..., t+3
+window_margin = 3
+
+df_train %>% 
+  filter(
+    date >= "2017-01-01"
+  ) %>% 
+  group_by(family) %>% 
+  summarise(
+    sales = sum(sales)
+  ) %>% 
+  group_by(family) %>% 
+  mutate(
+    trend_est = slider::slide_dbl(
+      .x = sales,
+      .f = mean,
+      .before = window_margin,
+      .after = window_margin
+    ),
+    sales_detrended = sales - trend_est
+  ) %>% 
+  ungroup() %>%
+  ACF(sales_detrended, lag_max = 31) %>% 
+  autoplot() + 
+  facet_wrap(~family, ncol = 3, scales = "free_y")
+```
+
+Notes:
+* The spikes at lag 7, 14, 21, and 28 indicate weekly seasonality for almost every family. The one exception is Books.
+* The autocorrelation with lag 1 has been reduced significantly for each family, indicating the estimated trend is strong enough to capture much of the autocorrelation.
+
+## By Store
+
+```{r, warning = FALSE, message=FALSE, fig.height = 20, fig.width = 14}
+# window size used for de-trending should be
+# equal to the periodicity of 
+# the hypothesized seasonal pattern;
+# since we suspect weekly seasonality, the window
+# should be t-3, ..., t, ..., t+3
+window_margin = 3
+
+df_train %>% 
+  filter(
+    date >= "2017-01-01"
+  ) %>% 
+  group_by(store_nbr) %>% 
+  summarise(
+    sales = sum(sales)
+  ) %>% 
+  group_by(store_nbr) %>% 
+  mutate(
+    trend_est = slider::slide_dbl(
+      .x = sales,
+      .f = mean,
+      .before = window_margin,
+      .after = window_margin
+    ),
+    sales_detrended = sales - trend_est
+  ) %>% 
+  ungroup() %>%
+  ACF(sales_detrended, lag_max = 31) %>% 
+  autoplot() + 
+  facet_wrap(~store_nbr, ncol = 3, scales = "free_y")
+```
+
+Notes:
+* The autocorrelations with lag 1 have disappeared for almost every store.
+* The spikes at lag 7, 14, 21, etc. indicate a strong weekly seasonality.
+
+---

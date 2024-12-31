@@ -1,0 +1,97 @@
+---
+title: "STL Decomposition With Linear Trend"
+author: "Herman Yu"
+output:
+  rmdformats::downcute
+---
+
+# Introduction
+
+This notebook builds an STL decomposition model with linear trend to generate forecast submissions for the Store Sales Kaggle Competition. The resulting forecast an RMSLE of 0.45622 on the submission data.
+
+# Setup
+
+## Libraries And Global Variables
+```{r, warning=FALSE, message=FALSE}
+DATA_DIR <- Sys.getenv("DATA_DIR")
+DATA_PATH <- paste0(DATA_DIR, "/store-sales-time-series/train.csv")
+TEST_PATH <- paste0(DATA_DIR, "/store-sales-time-series/test.csv")
+
+library(fpp3)
+library(readr)
+```
+
+## Data Loading
+
+```{r}
+df <- read_csv(DATA_PATH) %>% 
+  as_tsibble(
+    key = c(family, store_nbr),
+    index = date
+  ) %>% 
+  select(
+    -c(
+      id,
+      onpromotion
+    )
+  ) %>% 
+  filter(
+    date >= "2017-04-20"
+  )
+
+df_submit <- read_csv(TEST_PATH)
+
+h_length <- df_submit %>% 
+  distinct(date) %>% 
+  nrow()
+```
+
+# Model Fitting
+
+```{r}
+sales_stl_decomp_model <- model(
+  .data = df
+  ,
+  stl = decomposition_model(
+    STL( sales ~ trend(window = 7), robust = TRUE ),
+    TSLM( season_adjust ~ trend() )
+  )
+)
+```
+
+# Generate Submission
+```{r}
+sales_stl_decomp_forecast <- sales_stl_decomp_model %>% 
+  forecast(
+    h = h_length
+  ) %>% 
+  as_tibble() %>% 
+  select(
+    date,
+    family,
+    store_nbr,
+    forecast = .mean
+  )
+```
+
+```{r}
+df_submit %>% 
+  left_join(
+    sales_stl_decomp_forecast
+    ,
+    by = c("date", "family", "store_nbr")
+  ) %>% 
+  mutate(
+    sales = ifelse(
+      (forecast < 0) | (is.na(forecast)),
+      0,
+      forecast
+    )
+  ) %>% 
+  select(
+    id,
+    sales
+  ) %>% 
+  write_csv("submissions/V_02-STL-Decomposition-With-Linear-Trend.csv")
+```
+
