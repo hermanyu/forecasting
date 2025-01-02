@@ -1,0 +1,98 @@
+---
+title: "Exponential Smoothing Model"
+author: "Herman Yu"
+output:
+  rmdformats::downcute
+---
+
+# Introduction
+
+This notebook builds an exponential smoothing ETS(A,N,A) model to generate forecast submissions for the Store Sales Kaggle Competition. The resulting forecast an RMSLE of 0.42958 on the submission data.
+
+# Setup
+
+## Libraries And Global Variables
+```{r, warning=FALSE, message=FALSE}
+DATA_DIR <- Sys.getenv("DATA_DIR")
+DATA_PATH <- paste0(DATA_DIR, "/store-sales-time-series/train.csv")
+TEST_PATH <- paste0(DATA_DIR, "/store-sales-time-series/test.csv")
+
+library(fpp3)
+library(readr)
+```
+
+## Data Loading
+
+```{r}
+df <- read_csv(DATA_PATH) %>% 
+  as_tsibble(
+    key = c(family, store_nbr),
+    index = date
+  ) %>% 
+  select(
+    -c(
+      id,
+      onpromotion
+    )
+  ) %>% 
+  filter(
+    date >= "2017-04-20"
+  )
+
+df_submit <- read_csv(TEST_PATH)
+
+h_length <- df_submit %>% 
+  distinct(date) %>% 
+  nrow()
+```
+
+# Model Fitting
+
+```{r}
+forecast_model <- model(
+  .data = df
+  ,
+  stl = ETS(
+    sales ~ error("A") + trend("N") + season("A")
+  )
+)
+```
+
+# Generate Submission
+```{r}
+forecast <- forecast_model %>% 
+  forecast(
+    h = h_length
+  ) %>% 
+  as_tibble() %>% 
+  select(
+    date,
+    family,
+    store_nbr,
+    forecast = .mean
+  )
+```
+
+```{r}
+df_submit %>% 
+  left_join(
+    forecast
+    ,
+    by = c("date", "family", "store_nbr")
+  ) %>% 
+  mutate(
+    sales = ifelse(
+      (forecast < 0) | (is.na(forecast)),
+      0,
+      forecast
+    )
+  ) %>% 
+  select(
+    id,
+    sales
+  ) %>% 
+  write_csv("submissions/V_03-Exponential-Smoothing-ETS_ANA.csv")
+```
+
+
+---

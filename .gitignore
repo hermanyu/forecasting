@@ -5,7 +5,6 @@
 
 .Renviron
 
-.csv
-.html
+*.csv
 
 sandbox/
