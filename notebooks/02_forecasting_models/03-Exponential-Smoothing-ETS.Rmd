@@ -7,13 +7,846 @@ output:
 
 # Introduction
 
-For given time series $Y_t$, suppose we had an observed set of values $y_1, y_2,\ldots, y_{T-1}, y_T$. If we are trying to forecast $y_{T+1}$, it is generally the case that more recent values like $y_T$ will hold more information than distant values like $y_1$. Therefore, we would like a forecasting model that gives more weight to recent values and less weight to distant values. So one approach to building a forecasting model would be to take a weighted sum:
+For given time series $Y_t$, suppose we had an observed set of values $y_1, y_2,\ldots, y_{T-1}, y_T$. If we are trying to forecast $y_{T+1}$, it is generally the case that:
+
+1) Every observation $y_1,\ldots, y_T$ contains *some* information on the possible value of $y_{T+1}$.
+2) More recent values like $y_T$ are more relevant than older values like $y_1$.
+
+Therefore, it makes sense to specify a forecasting model that gives more weight to recent values and less weight to distant values. This is the idea behind *exponential smoothing*, where each observation $y_t$ is given a weight $w_t$ which exponentially decay as $t\to 1$.
+
+
+# Motivation: Forecasting Algerian Exports
+
+To motivate the idea behind exponential smoothing, consider Algerian exports (as percent of GDP) found in the `global_economy` data set
+
+```{r, warning=FALSE, message=FALSE}
+options(scipen=999)
+library(fpp3)
+library(DT)
+
+alg_exports <- global_economy %>% 
+  filter(
+    Country == "Algeria"
+  ) %>% 
+  filter(
+    Year >= 1962
+  )
+
+alg_exports %>% 
+  autoplot(Exports) + 
+  labs(title = "Algeria Exports", y = "% Of GDP")
+```
+
+## Overall Mean Model
+
+Suppose that we were asked to use the data from 1978 to 2005 to forecast the data for 2006 onward. Since the data seems to hover around a mean, it might make sense to use an overall mean model:
+
+```{r, warning=FALSE}
+model(
+  .data = alg_exports %>% 
+    filter(Year <= 2005)
+  ,
+  `Mean Model` = MEAN(Exports)
+) %>% 
+  forecast(h=12) %>% 
+  autoplot(
+    alg_exports
+  ) + 
+  geom_hline(
+    yintercept = mean(alg_exports %>% filter(Year <= 2005) %>% pull(Exports)),
+    linetype = "dashed",
+    color = "blue"
+  ) + 
+  labs(title = "Algeria Exports - Overall Mean Model")
+```
+
+```{r}
+model(
+  .data = alg_exports %>% 
+    filter(Year <= 2005)
+  ,
+  `Mean Model` = MEAN(Exports)
+) %>% 
+  gg_tsresiduals()
+```
+
+The overall mean model does not seem satisfactory because it does a poor job at forecasting the values near the horizon, i.e. 2006 through 2011. We notice that this is primarily due to the autocorrelation in the data: the fact that exports are high in 2000 through 2005 indicates that exports will also be high the next few years as well. The overall mean model ignores this autocorrelation behavior completely, leading to  *high bias* aka *underfitting*. 
+
+A little underfitting might not be a problem if the model is able to generalize sufficiently well. We can look at the out-of-sample errors to get a feel for how well the model generalizes:
+
+```{r}
+model(
+  .data = alg_exports %>% 
+    filter(Year <= 2005)
+  ,
+  `Mean Model` = MEAN(Exports)
+) %>% 
+  forecast(
+    h = 12
+  ) %>% 
+  accuracy(
+    alg_exports %>% 
+      filter(Year > 2005)
+  ) %>% 
+  select(
+    -c(
+      .type,
+      ME,
+      MASE,
+      RMSSE,
+      ACF1
+    )
+  ) %>% 
+  mutate(
+    across(where(is.numeric), ~round(., 4))
+  ) %>% 
+  datatable()
+```
+
+
+## Naive Model
+
+If we want a model that captures the autocorrelation, we could try a naive model (aka random walk):
+
+```{r, warning = FALSE}
+model(
+  .data = alg_exports %>% 
+    filter(Year <= 2005)
+  ,
+  `Naive Model` = NAIVE(Exports)
+) %>% 
+  forecast(h=12) %>% 
+  autoplot(
+    alg_exports
+  ) + 
+  geom_hline(
+    yintercept = mean(alg_exports %>% filter(Year <= 2005) %>% pull(Exports)),
+    linetype = "dashed",
+    color = "blue"
+  ) + 
+  labs(title = "Algeria Exports - Naive Model Forecast")
+```
+
+```{r, warning = FALSE, message=FALSE}
+model(
+  .data = alg_exports %>% 
+    filter(Year <= 2005)
+  ,
+  `Naive Model` = NAIVE(Exports)
+) %>% 
+  gg_tsresiduals()
+```
+
+```{r}
+model(
+  .data = alg_exports %>% 
+    filter(Year <= 2005)
+  ,
+  `Mean Model` = NAIVE(Exports)
+) %>% 
+  forecast(
+    h = 12
+  ) %>% 
+  accuracy(
+    alg_exports %>% 
+      filter(Year > 2005)
+  ) %>% 
+  select(
+    -c(
+      .type,
+      ME,
+      MASE,
+      RMSSE,
+      ACF1
+    )
+  ) %>% 
+  mutate(
+    across(where(is.numeric), ~round(., 4))
+  ) %>% 
+  datatable()
+```
+
+The naive model does a better job forecasting future values since it completely utilizes the autocorrelation at lag 1. However, the naive model generalizes much worse than the overall mean model. We notice the primary reason for this is the long-run equilibrium behavior of the data. Even though the data might see short-run periods of spikes and trophs, the data always seems to drift back towards the long-run historical mean. The naive model completely ignores this behavior and focuses solely on the most recent period. In particular, if our observed data just happens to end at a peak (resp. troph), the naive model will always predict values that are too high (resp. too low). Formally, the naive model experiences *high variance* aka *overfitting*.
+
+
+# Simple Exponential Smoothing (SES)
+
+The overall mean model $\hat{y}_{T+h} = \frac{1}{T}\sum_{t=1}^T y_t$ is able to capture the historical long-run behavior but unable to capture the autocorrelation. On the other hand, the naive model $\hat{y}_{t+h} = y_T$ is able to capture the autocorrelation but unable to capture the historical long-run behavior. Therefore, the natural solution is to try and combine the two models.
+
+## Model Specification
+
+The **simple exponential smoothing** model hypothesizes that the data generation process is governed by a set of *state equations*:
 
 $$
-\hat{y}_{T+1} := \sum_{t=1}^T w_t y_t
+\begin{align*}
+L_0 &= l_0\\
+L_t &= L_{t-1} + \alpha\epsilon_t \qquad \alpha \in [0, 1]\\
+Y_t &= L_{t-1} + \epsilon_t\\
+\end{align*}
 $$
 
-where the weights $w_t$ decrease as $t\to 1$. This is the idea behind *exponential smoothing*, where the weights $w_t$ exponentially decay as $t\to 1$.
+where the $\epsilon_t$ are i.i.d. a random variables with mean 0. Notice we can rewrite the third equation as $\epsilon_t = Y_t - L_{t-1}$. This allows us to re-write the recursive formulas in the following way:
+
+$$
+\begin{align*}
+L_t &= L_{t-1} + \alpha \epsilon_t\\
+L_t &= L_{t-1} + \alpha(Y_t - L_{t-1})\\
+L_t &= \alpha Y_t + (1-\alpha)L_{t-1}
+\end{align*}
+$$
+
+and:
+
+$$
+\begin{align*}
+Y_t &= L_{t-1} + \epsilon_t \\
+Y_t &= \epsilon_t + \alpha Y_{t-1} + (1-\alpha)L_{t-2}
+\end{align*}
+$$
+
+We can inductively apply these identities to unpack the formula for $Y_t$:
+
+$$
+\begin{align*}
+Y_t &= \epsilon_t + \alpha Y_{t-1} + (1-\alpha)L_{t-2}\\
+&= \epsilon_t + \alpha Y_{t-1} + \alpha(1-\alpha)Y_{t-2} + (1-\alpha)^2L_{t-3}\\
+&= \epsilon_t + \alpha Y_{t-1} + \alpha(1-\alpha)Y_{t-2} + \alpha(1-\alpha)^2Y_{t-3} + (1-\alpha)^3L_{t-4}\\
+&= \ldots\\
+&= \epsilon_t + (1-\alpha)^{t-1} l_0 + \sum_{i=1}^{t-1} \alpha(1-\alpha)^{t-1-i}Y_i
+\end{align*}
+$$
+
+In other words, the simple exponential smoothing model just stipulates that $Y_t$ is a decaying geometric sum of its previous values (hence the name "exponential" smoothing). This model makes a lot of intuitive sense: we are giving more weight to more recent values, while not completely ignoring the long-run behavior. In particular, notice the two special cases:
+
+1) When $\alpha = 0$, the model reduces to $Y_t = l_0 + \epsilon_t$ which is just the overall mean model, with overall mean $l_0$.
+2) When $\alpha = 1$, the model reduces to $Y_t = Y_{t-1} + \epsilon_t$ which is just the simple random walk model.
+
+Therefore, the simple exponential smoothing model can also be interpreted as using the overall mean model to regularize the simple random walk model: 
+
+* Smaller values of $\alpha$ will yield a more regularized ("smoother") model that more closely mimics the flat overall mean model.
+* Larger values of $\alpha$ will yield a less regularized ("jagged") model that more closely mimics the a simple random walk.
+
+Note that from the state equations, we have $Y_t - L_t = (1-\alpha)\epsilon_t$
+
+$$
+\begin{align*}
+Y_t - L_t &= (L_{t-1} + \epsilon_t) - (L_{t-1} + \alpha \epsilon_t)\\
+Y_t - L_t &= (1-\alpha)\epsilon_t \\
+L_t &= Y_t - (1-\alpha)\epsilon_t 
+\end{align*}
+$$
+
+Using the formula previously derived for $Y_t$, we also get a formula for $L_t$:
+
+$$
+\begin{align*}
+L_t &= -(1-\alpha)\epsilon_t + \epsilon_t + (1-\alpha)^{t-1} l_0 + \sum_{i=1}^{t-1} \alpha(1-\alpha)^{t-1-i}Y_i\\
+&= \alpha \epsilon_t + (1-\alpha)^{t-1} l_0 + \sum_{i=1}^{t-1} \alpha(1-\alpha)^{t-1-i}Y_i
+\end{align*}
+$$
+
+## Model Fitting
+
+For an observed set of values $y_1,\ldots, y_T$ and some time $t$, the expected value of $Y_t$ given all the information available at time $T$ is:
+
+$$
+\begin{align*}
+f_{l_0,\alpha}(t) &:= E[Y_t\,\,|\,\, T]\\
+&= E\left[\epsilon_t + (1-\alpha)^{t-1} l_0 + \sum_{i=1}^{t-1} \alpha(1-\alpha)^{t-1-i}Y_i\,\,\middle|\,\,T\right]\\
+&= E[\epsilon_t \,\,|\,\, T] 
+  + E\left[(1-\alpha)^{t-1}l_0 \,\,\middle|\,\, T \right] 
+  + \sum_{i=1}^{t-1}\alpha(1-\alpha)^{t-1-i} E\left[Y_{i} \,\,\middle|\,\,T\right]\\
+&= \begin{cases}
+(1-\alpha)^{t-1}l_0 + \sum_{i=1}^{t-1}\alpha(1-\alpha)^{t-1-i}y_{i} & t \leq T\\
+(1-\alpha)^{t-1}l_0 + \sum_{i=1}^{T}\alpha(1-\alpha)^{t-1-i}y_{i} & t  > T+1\\
+\end{cases}
+\end{align*}
+$$
+
+Intuitively, the point estimate at time $t$ is just a weighted sum of all the previously observed values with more weight being given to more recent observations. The forecasting function $f_{l_0,\alpha}$ is parameterized by $l_0$ and $\alpha$. Therefore an estimate of the forecasting function $\hat{f}_{l_0,\alpha}$ is obtained by estimating the parameters $l_0$ and $\alpha$ by fitting onto the data. Two possible approaches for fitting are:
+
+1) Maximum likelihood estimate (MLE)
+2) Minimizing the sum of squared errors (SSE)
+
+Unfortunately, the function $\hat{f}_{l_0,\alpha}$ is non-linear w.r.t. to $l_0$ and $\alpha$, so a non-linear optimization algorithm has to be used (e.g. gradient descent).
+
+## Example: Algerian Exports
+
+We return now to the original task of trying to forecast Algerian exports for the years 2006 to 2017. Recall that the plot of the historical data:
+
+```{r}
+alg_exports %>% 
+  filter(
+    Year <= 2005
+  ) %>% 
+  autoplot(Exports) + 
+  labs(title = "Algeria Exports (1978 - 2005)")
+```
+
+We hypothesize a simple exponential smoothing model:
+
+$$
+Y_t = L_{t-1} + \epsilon_t\\
+L_t = L_{t-1} + \alpha \epsilon_t
+$$
+
+This model can be specified using the `ETS()` function in `fable`.
+
+```{r}
+# We use the ETS() function to generate
+# a mdl_defn object
+# for a simple exponential smoothing model.
+simple_exp_smoothing_spec <- ETS(
+  Exports ~ error("A") +   # "A" = use additive errors
+              trend("N") + # "N" = no trend
+              season("N")  # "N" = no seasonality
+)
+
+class(simple_exp_smoothing_spec)
+```
+
+We have to fit the model by estimating $l_0$ and $\alpha$ using non-linear optimization. Thankfully, the `model()` function in `fable` handles this for us. It fits the model minimizing the sum of squared errors (SSE):
+
+```{r}
+alg_exports_simple_exp_model <- model(
+  .data = alg_exports %>% 
+    filter(
+      Year <= 2005
+    )
+  ,
+  `Simple Exp Smoothing` = simple_exp_smoothing_spec
+)
+
+alg_exports_simple_exp_model
+```
+
+We can view the values of the fitted parameters $l_0$ and $\alpha$ by calling `report()` on the `mable` object:
+
+```{r}
+report(alg_exports_simple_exp_model)
+```
+
+The fitted $\alpha$  is nearly equal to 1, so the model pretty much reduces to a naive model (simple random walk)! Nonetheless, the resulting forecast is:
+
+```{r}
+alg_exports_simple_exp_model %>% 
+  forecast(
+    h = 12
+  ) %>% 
+  autoplot(
+    alg_exports
+  ) + 
+  geom_line(
+    aes(y = .fitted),
+    data = augment(alg_exports_simple_exp_model),
+    col="#3279a8"
+  ) + 
+  labs(title = "Algeria Exports - Simple Exponential Smoothing Model")
+```
 
 
-# Simple Exponential Smoothing
+# Holt's Linear Method
+
+## Motivation: Forecasting Australian Exports
+
+Simple exponential smoothing models generate a *flat* forecast, i.e. the model forecasts the same value for all future time steps $T+h$. If the data has a clear long-run trend, then a flat forecast will be biased since it will consistently under- or overestimate the future values. As an example, consider the Australian exports data from 1960 to 2017:
+
+```{r}
+aus_exports <- global_economy %>% 
+  filter(
+    Country == "Australia"
+  )
+
+aus_exports %>% 
+  autoplot(Exports) + 
+  labs(title = "Australian Exports", y = "% of GDP")
+```
+
+Suppose we were asked to use the data from 1960 to 1999 to forecast Australian exports (as a percent of GDP) for 2000 to 2017. If we fit a simple exponential smoothing model, the resulting forecast we obtain would look like this:
+
+```{r}
+aus_exports_ses <- model(
+  .data = aus_exports %>% 
+    filter(Year <= 1999)
+  ,
+  `SES` = ETS( Exports ~ error("A") + trend("N") + season("N"))
+)
+
+aus_exports_ses %>% 
+  forecast(h = 18) %>% 
+  autoplot(aus_exports)
+```
+
+Notice in particular that the SES model generates a flat forecast; this consistently underestimates the future values since the time series is clearly trended upward. This motivates the need for adjusting the SES model to be able to account for trends in the data. The out-of-sample prediction errors are:
+
+```{r}
+aus_exports_ses %>% 
+  forecast(h = 18) %>% 
+  accuracy(
+    aus_exports %>% 
+      filter(
+        Year >= 2000
+      )
+  ) %>% 
+  select(
+    -c(
+      .type,
+      ME,
+      MASE,
+      RMSSE,
+      ACF1
+    )
+  ) %>% 
+  mutate(
+    across(where(is.numeric), ~round(., 4))
+  ) %>% 
+  datatable()
+```
+
+
+## Model Specification
+
+*Holt's linear method* is an augmented version of SES which includes a component to model the trend. Specifically, **Holt's linear method** hypothesizes that the data generation process $Y_t$ is governed by the following set of state equations:
+
+$$
+\begin{align*}
+L_0 &= l_0\\
+B_0 &= b_0\\
+Y_t &= L_{t-1} + B_{t-1} + \epsilon_t\\
+L_t &= L_{t-1} + B_{t-1} + \alpha \epsilon_t\\
+B_t &= B_{t-1} + \beta \epsilon_t
+\end{align*}
+$$
+
+with $\epsilon_t$ i.i.d and mean 0. We can isolate $\epsilon_t$ in the 3rd equation to get $\epsilon_t = Y_t - L_{t-1} + B_{t-1}$. To build some intuition, let's consider a thought experiment where the system described above exists in a "vacuum", i.e. there are no random shocks to the system. In this case, $\epsilon_t = 0$ for all $t$, and the equations above reduce to:
+
+$$
+\begin{align*}
+B_t &= B_{t-1} = B_{t-2} = \ldots = B_0 = b_0\\
+L_t &= L_{t-1} + b_0 = L_{t-2}  + 2b_0 = \ldots = l_0 + tb_0\\
+Y_t &= L_{t-1} + b_0 = L_{t-2} + 2b_0 = \ldots = l_0 + tb_0
+\end{align*}
+$$
+
+Therefore, in the absence of random shocks, $Y_t = L_t = l_0 + tb_0$ reduces to a perfectly linear trend. Thus, Holt's linear method model can be interpreted as a linear trend model which experiences random shocks that "jolt" the trend up and down.
+
+The system of equations, as given, do not lend themselves well to model estimation. We therefore need to first rewrite the to get more useful formulas for $L_t$ and $B_t$. First, observe that we can isolate $\epsilon_t$ in the definition of $Y_t$ to get $\epsilon_t = Y_t - L_{t-1} - B_{t-1}$. This allows us to re-write the definition of $L_t$ as:
+
+$$
+\begin{align*}
+L_t &= L_{t-1} + B_{t-1} + \alpha \epsilon_t \\
+L_t &= L_{t-1} + B_{t-1} + \alpha(Y_t - L_{t-1} - B_{t-1})\\
+L_t &= \alpha Y_t + (1-\alpha)(L_{t-1} - B_{t-1})
+\end{align*}
+$$
+
+We can also isolate $\epsilon_t$ by taking difference of $L_t$ with $L_{t-1}$:
+
+$$
+\begin{align*}
+L_t - L_{t-1} &= (L_{t-1} + B_{t-1} + \alpha \epsilon_t) - L_{t-1}\\
+L_t - L_{t-1} &= B_{t-1} + \alpha \epsilon_t\\
+\epsilon_t &= \alpha^{-1}(L_t - L_{t-1} - B_{t-1})\\
+\end{align*}
+$$
+
+Plugging this into the definition of $B_t$ yields
+
+$$
+\begin{align*}
+B_t &= B_{t-1} + \beta \epsilon_t\\
+B_t &= B_{t-1} + \beta\alpha^{-1}(L_t - L_{t-1} - B_{t-1})\\
+B_t &= (1 - \beta\alpha^{-1}) B_{t-1} + \beta\alpha^{-1}(L_t - L_{t-1})
+\end{align*}
+$$
+
+
+## Model Fitting
+
+Let $y_t$, $l_t$, $b_t$, and $e_t$ be the actual values at time $t$ for $Y_t$, $L_t$, $B_t$, and $\epsilon_t$ respectively. From the model definition of $Y_t$ and the derive formulas for $L_t$ and $B_t$, we get:
+
+$$
+\begin{align*}
+L_0 &= l_0\\
+B_0 &= b_0\\
+y_t &= l_{t-1} + b_{t-1} + e_t\\
+l_t &= \alpha y_t + (1-\alpha)(l_{t-1} + b_{t-1})\\
+b_t &= (1-\beta\alpha^{-1})b_{t-1} + \beta\alpha^{-1}(l_t - l_{t-1})\\
+\end{align*}
+$$
+
+Thus a generating a point estimate $\hat{y}_t$ for $y_t$ requires estimating the parameters $l_0$, $b_0$, $\alpha$, and $\beta$. This is done by finding values $\theta = (\hat{l}_0, \hat{b}_0, \hat{\alpha}, \hat{\beta})$, which generate $\hat{y}_t$ so as to minimize the sum of squared residuals:
+
+$$
+\hat{\theta} := \min_{\theta} \sum_{t = 1}^T (y_t - \hat{y}_t)^2
+$$
+
+The resulting forecast generated by the model is given by:
+
+$$
+\begin{align*}
+\hat{y}_{T+h|T} &= \hat{l}_T + h\cdot \hat{b}_t
+\end{align*}
+$$
+
+## Example: Australian Exports
+
+We now fit an exponential smoothing model using Holt's linear method to Australian exports:
+
+```{r}
+aus_exports_holt <- model(
+  .data = aus_exports %>% 
+    filter(Year <= 1999)
+  ,
+  `Holt` = ETS( Exports ~ error("A") + trend("A") + season("N"))
+)
+
+report(aus_exports_holt)
+```
+
+```{r}
+aus_exports_holt %>% 
+  forecast(h = 18) %>% 
+  autoplot(aus_exports)
+```
+
+
+Notice the forecast no longer consistently underestimates the true value. The out-of-sample prediction errors are:
+
+```{r}
+aus_exports_holt %>% 
+  forecast(h = 18) %>% 
+  accuracy(
+    aus_exports %>% 
+      filter(
+        Year >= 2000
+      )
+  ) %>% 
+  select(
+    -c(
+      .type,
+      ME,
+      MASE,
+      RMSSE,
+      ACF1
+    )
+  ) %>% 
+  mutate(
+    across(where(is.numeric), ~round(., 4))
+  ) %>% 
+  datatable()
+```
+
+The out-of-sample errors are noticeable smaller than the SES model from before, indicating a better fit.
+
+# Holt's Model With Damped Trend
+
+## Motivation: Forecasting Australian Exports
+
+When fitting an exponential smoothing with linear trend model to forecast Australian exports, we get:
+
+```{r}
+aus_exports_holt <- model(
+  .data = aus_exports %>% 
+    filter(Year <= 1999)
+  ,
+  `Holt` = ETS( Exports ~ error("A") + trend("A") + season("N"))
+)
+
+aus_exports_holt %>% 
+  forecast(h = 18) %>% 
+  autoplot(aus_exports)
+```
+
+We notice that the data begins to diverge from the trend line: Australian exports begin to asymptote as $t$ gets large. Holt's linear model fits a trend that will increase or decrease indefinitely, but real world systems generally do not behave this way. We therefore desire to "dampen" the trend as $t$ gets large.
+
+## Model Specification
+
+A **dampened trend model** is a model of the form:
+
+$$
+\begin{align*}
+Y_t &= L_{t-1} + \phi B_{t-1} + \epsilon_t\\
+L_t &= L_{t-1} + \phi B_{t-1} + \alpha \epsilon_t\\
+B_t &= \phi B_{t-1} + \beta \epsilon_t
+\end{align*}
+$$
+
+where $\alpha, \beta, \phi \in [0,1]$. Notice that when $\phi = 1$, the model reduces to Holt's linear trend model previously discussed.
+
+## Model Fitting
+
+The dampened trend model stipulates that the actual values of the variables at time $t$ satisfy the following system of equations:
+
+$$
+\begin{align*}
+L_0 &= l_0\\
+B_0 &= b_0\\
+y_t &= l_{t-1} + \phi b_{t-1} + e_t\\
+l_t &= \alpha y_t + (1-\alpha)(l_{t-1} + \phi b_{t-1})\\
+b_t &= (1-\beta\alpha^{-1})\phi b_{t-1} + \beta\alpha^{-1}(l_t - l_{t-1})\\
+\end{align*}
+$$
+
+Estimates for the parameters $\hat{\theta} = (\hat{l}_0,\hat{b_0}, \hat{\alpha},\hat{\beta},\hat{\phi})$ are found by minimizing the sum of squared residuals:
+
+$$
+\hat{\theta} := \min_{\theta}\sum_{t= 1}^T (y_t - \hat{y}_t)^2
+$$
+
+## Example: Australian Exports
+
+```{r}
+aus_exports_damped <- model(
+  .data = aus_exports %>% 
+    filter(Year <= 1999)
+  ,
+  `Holt` = ETS( Exports ~ error("A") + trend("A") + season("N")),
+  `Damped` = ETS( Exports ~ error("A") + trend("Ad") + season("N"))
+)
+
+report(
+  aus_exports_damped %>% 
+    select(Damped)
+)
+```
+
+```{r}
+aus_exports_damped %>% 
+  forecast(h = 40) %>% 
+  autoplot(aus_exports, level = NULL)
+```
+
+
+```{r}
+aus_exports_damped %>% 
+  forecast(h = 18) %>% 
+  accuracy(
+    aus_exports %>% 
+      filter(
+        Year >= 2000
+      )
+  ) %>% 
+  select(
+    -c(
+      .type,
+      ME,
+      MASE,
+      RMSSE,
+      ACF1
+    )
+  ) %>% 
+  mutate(
+    across(where(is.numeric), ~round(., 4))
+  ) %>% 
+  datatable()
+```
+
+
+# Holt-Winters Method For Seasonality
+
+## Motivation: Forecasting Australian Holidays
+
+If we can augment the exponential smoothing model to account for trends, the natural follow-up question is: can we do something to incorporate seasonality? The answer is "yes" of course and we tackle that question now. As a motivating example, supposed we were tasked forecasting Australian holiday travel for 2016 through 2017, using historic data from 1998 to 2015:
+
+
+```{r}
+aus_holidays <- tourism %>% 
+  filter(
+    Purpose == "Holiday"
+  ) %>% 
+  summarise(
+    Trips = sum(Trips)
+  )
+
+aus_holidays %>% 
+  filter_index("1998 Q1" ~ "2015 Q4") %>% 
+  autoplot(
+    Trips
+  )
+```
+
+We start by fitting an exponential smoothing model with linear trend (both undamped and damped):
+
+```{r}
+aus_holidays_holt <- model(
+  .data = aus_holidays %>% 
+    filter_index("1998 Q1" ~ "2015 Q4")
+  ,
+  `Holt` = ETS( Trips ~ error("A") + trend("A") + season("N") ),
+  `Damped` = ETS( Trips ~ error("A") + trend("Ad") + season("N") )
+)
+
+aus_holidays_holt %>% 
+  forecast(
+    h = 8
+  ) %>% 
+  autoplot(
+    aus_holidays,
+    level = NULL
+  )
+```
+
+We noticed that both models severely underestimate the out-of-sample data for 2016 through 2017. This is because of the heavy seaonsality in the data: our training set happened to end on seasonal troph. Since the models do not account for seasonality, the corresponding forecasts do not adjust upward to handle this behavior. We can check the seasonality of the data with a seasonal plot and ACF plot:
+
+```{r}
+aus_holidays %>% 
+  gg_season(Trips)
+```
+
+Notice that holiday travel usually peaks around Q1 and steadily decreases throughout the year. Since our observation window ends on a Q4 period, the models will consistently underestimate all future values.
+
+```{r}
+aus_holidays %>% 
+  ACF(Trips) %>% 
+  autoplot()
+```
+
+The ACF plot shows massive and consistent spikes at lag multiples of 4, indicating the quarterly seasonality. In order handle this seasonal behavior, we can adjust our exponential smoothing models by including a seasonality component,
+
+## Model Specification
+
+The **Holt-Winters method** for exponential smoothing augments Holt's linear model by including a seasonal term $S_t$ with period p. The model specified by the following set of state equations:
+
+$$
+\begin{align*}
+Y_t &= L_{t-1} + \phi B_{t-1} + S_{t-p} + \epsilon_t\\
+L_t &= L_{t-1} + \phi B_{t-1} + \alpha \epsilon_t \\
+B_t &= \phi B_{t-1} + \beta \epsilon_t\\
+S_t &= S_{t-p} + \gamma \epsilon_t
+\end{align*}
+$$
+
+## Model Fitting
+
+The Holt-Winters model implies that the values taken on by the random variables at time $t$ satisfy the following system of equations:
+
+$$
+\begin{align*}
+L_0 &= l_0\\
+B_0 &= b_0\\
+S_{0} &= s_0\\
+S_{-1} &= s_{-1}\\
+\vdots\\
+S_{-p+1} &= s_{-p+1}\\
+y_t &= l_{t-1} + \phi b_{t-1} + s_t + e_t\\
+l_t &= \alpha y_t + (1-\alpha)(l_{t-1} + \phi b_{t-1})\\
+b_t &= (1-\beta\alpha^{-1})\phi b_{t-1} + \beta\alpha^{-1}(l_t - l_{t-1})\\
+s_t &= \gamma(y_t - l_{t-1} - b_{t-1}) + (1-\gamma)s_{t-p}
+\end{align*}
+$$
+
+As before, the model is fitted by estimating parameter values $\hat{\theta} = (\hat{l_0}, \hat{b_0},\hat{s_0},\ldots, \hat{s_p}, \hat{\alpha},\hat{\beta},\hat{\gamma})$ by minimizing the sum of square residuals:
+
+$$
+\hat{\theta} := \min_{\theta}\sum_{t=1}^T (y_t - \hat{y}_i)^2 
+$$
+
+## Example: Australian Holidays
+
+```{r}
+aus_holidays_holt_winters <- model(
+  .data = aus_holidays %>% 
+    filter_index("1998 Q1" ~ "2015 Q4")
+  ,
+  `Holt` = ETS( Trips ~ error("A") + trend("A") + season("N") ),
+  `Holt-Winters` = ETS( Trips ~ error("A") + trend("A") + season("A") ),
+)
+
+report(
+  aus_holidays_holt_winters %>% 
+    select(`Holt-Winters`)
+)
+```
+
+```{r}
+aus_holidays_holt_winters %>% 
+  forecast(
+    h = 8
+  ) %>% 
+  autoplot(
+    aus_holidays,
+    level = NULL
+  )
+```
+
+Notice that the forecast generated by Holt-Winters is much better than the forecast generated using just Holt's method.
+
+```{r}
+aus_holidays_holt_winters %>% 
+  forecast(h = 8) %>% 
+  accuracy(
+    aus_holidays %>% 
+      filter_index("2016 Q1" ~ "2017 Q4")
+  ) %>% 
+  select(
+    -c(
+      .type,
+      ME,
+      MASE,
+      RMSSE,
+      ACF1
+    )
+  ) %>% 
+  mutate(
+    across(where(is.numeric), ~round(., 4))
+  ) %>% 
+  datatable()
+```
+
+The out-of-sample errors are significantly better for the Holt-Winters model, indicating its efficacy at taming the seasonality of the data.
+
+# General ETS Models
+
+## Multiplicative Models
+
+So far, we have formulated various exponential smoothing models as *additive models*, e.g.
+
+$$
+Y_t = L_{t-1} + \phi B_{t-1} + S_{t-p} + \epsilon_t\\
+$$
+
+These models combine the various components via addition. An alternative approach is to formulate exponential smoothing models as *multiplicative* models, where the seasonality and error components interact with the system via multiplication. For example:
+
+$$
+Y_t = (L_{t-1} + B_{t-1})\cdot S_{t-p} + \epsilon_t
+$$
+
+This model has an *additive error* with *multiplicative seasonality*, since the seasonal component scales as a factor of the level and trend. On the other hand, another possible model would be:
+
+$$
+Y_t = (L_{t-1} + B_{t-1} + S_{t-p})\cdot (1 + \epsilon_t)
+$$
+
+This model has an *multiplicative error* with *additive seasonality*; the error term $\epsilon_t$ acts as *percent error* in this case. We could also have:
+
+$$
+Y_t = (L_{t-1} + B_{t-1})S_{t-p}(1+\epsilon_t)
+$$
+
+This model has *multiplicative error* with *multiplicative sesonality*. Note that the trend component is always additive (it represents a derivative).
+
+## ETS Models
+
+We can generalize the myriad flavors of exponential smoothing models into a single framework. An **ETS(e,t,s)** is an exponential smoothing model defined by the parameters:
+
+1) The parameter $e\in {A,M}$ specifies the nature of the error. Specifically:
+  * $e = A$ specifies a model with additive errors.
+  * $e = M$ specifies a model with multiplicative errors.
+2) The parameter $t\in {N, A, Ad}$ specifies the nature of the trend. Specifically:
+  * $t = N$ specifies a model with no trend.
+  * $t = A$ specifies a model with trend (which must be additive).
+  * $t = Ad$ specifies a model with damped trend.
+3) The parameter $s$ specifies the nature of the seasonality. Specifically:
+  * $s = N$ specifies a model with no seasonality.
+  * $s = A$ specifies a model with additive seasonality.
+  * $s = M$ specifies a model with multiplicative seasonality.
+  
+The acronym "ETS" itself is an abbreviation for "(E)rror-(T)rend-(S)easonality". We can classify our various models under this nomenclature:
+
+* Simple exponential smoothing is an ETS(A, N, N) model.
+* Holt's linear method is an ETS(A, A, N) model.
+* Damped trend method is an ETS(A, Ad, N) model.
+* Holt-Winters method is an ETS(A, A, A) model.
+
+---
