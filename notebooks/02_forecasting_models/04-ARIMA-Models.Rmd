@@ -1,0 +1,1161 @@
+---
+title: "04: ARIMA Models"
+author: "Herman Yu"
+output:
+  rmdformats::downcute
+---
+
+# Introduction
+
+To generate any kind of forecast, we are always making an implicit assumption that past data and future data must share some kind of pattern (otherwise we wouldn't be able to forecast!). This abstract notion can be made precise using the concept of *stationarity*. At a high level, a stationary time series is a process whose mean (aka "level") and variance (aka "volatility") does change across time. This property allows us to use the observed data to generate unbiased statistical estimates for future data. As it turns out **Wold's decomposition theorem** guarantees that any (weakly) stationary time series processes can be modeled using an $MA(\infty)$-model. Heuristically, forecasting is "straight forward" with a stationary process.
+
+When a time series is non-stationary, forecasting becomes much more challenging. Whether or not it is possible to forecast a non-stationary time series will come down to *why* the time series is non-stationary. In the most extreme case, suppose the that expected value $E[Y_t | t] = \mu(t)$ is allowed to be any real number with equal probability. Then any pass observations $y_1,\ldots, y_T$ won't be any good in estimating the future value $y_{T+1}$ since $\mu(T+1)$ is completely unrelated to $\mu(T)$. On the other hand, if $E[Y_t \,\,|\,\, t] = \mu(t)$ follows a well-defined and predictable formula, say $E[Y_t \,\,|\,\,t] = \beta_0 + \beta_1 t + 0.5 Y_{t-1} + \epsilon_t$, then we can generate forecasts for $Y_{T+1}$ by modeling the deterministic piece $\beta_0 + \beta_1 t$ and stationary piece $0.5Y_{t-1} + \epsilon_t$ separately.
+
+
+# The Fundamental Problem With Time Series Data
+
+A time series process is a sequence of random variables indexed by time $(Y_t)$. Each random variable $Y_t$ is a map from some outcome space $\Omega$ to the real numbers:
+
+$$
+Y_t: \Omega \to \mathbb{R}
+$$
+
+Thus a time series process is really a cartesian product of maps:
+
+$$
+(Y_T):\Omega \to \prod_{\mathbb{Z}}\mathbb{R}\\
+\omega \mapsto (y_t)_{t\in \mathbb{Z}}
+$$
+
+Thus an observed time series data set $y_1,\ldots, y_T$ is really just a *single* observation of the data generation process. This is the *fundamental issue* with time series data: the observations $y_1,\ldots, y_T$ cannot be pooled into a single sample.
+
+If the random variables $Y_1,\ldots, Y_T$ share nothing in common, then nothing can be estimated by the $y_1,\ldots,y_T$. However, if the $Y_1,\ldots, Y_T$ do share something in common, then it may be possible to estimate that common attribute by treating $y_1,\ldots, y_T$ as a single sample. Formally, an **invariant** of $Y_1,\ldots, Y_T$ is a numerical quantity $\theta(Y_i)$ such that $\theta(Y_1) = \ldots =\theta(Y_T)$. If such an invariant exists, it may be possible to estimate $\theta$ by treating $y_1,\ldots, y_T$ as a single sample.
+
+If the mean of each $Y_i$ is invariant, $E[Y_1] = \ldots = E[Y_T] = \mu$, then we can estimate $\mu$ by treating the $y_1,\ldots,y_T$ as a single sample and computing the sample mean:
+
+$$
+\hat{\mu} := \frac{1}{T}\sum_{t=1}^T y_t
+$$
+
+The sample statistic $\hat{\mu}$ is a random variable:
+
+$$
+\hat{\mu}: \Omega \to \mathbb{R}^T \to \mathbb{R}\\
+\omega \mapsto (y_1,\ldots, y_T) \to \frac{1}{T}\sum_{t=1}^T y_t
+$$
+
+And we can ask for the expected value of this random variable:
+
+$$
+\begin{align*}
+E[\hat{\mu}] &= \frac{1}{T}\sum_{t=1}^T E[Y_t]\\
+&= \frac{1}{T}\sum_{t=1}^T \mu\\
+&= \frac{1}{T}T\mu\\
+&= \mu
+\end{align*}
+$$
+
+And consequently, $\hat{\mu}$ is an unbiased estimator for $\mu$. Note that:
+
+$$
+\begin{align*}
+Var(\hat{\mu}) &= \frac{1}{T^2}Var\left(\sum_{t=1}^T Y_t\right)\\
+&= \frac{1}{T^2}\left(\sum_{t=1}^T Var(Y_t) + \sum_{t=1}^{T-1}Cov(Y_t, Y_{t+1} + \ldots + Y_T)\right)\\
+\end{align*}
+$$
+
+Since the $Y_t$ are not necessarily independent, the covariance term will generally be positive. In particular $Var(\hat{\mu}) > \frac{\sum Var(Y_t)}{T^2}$. This means that the standard error values assuming independence will be biased downward and underestimate the true variance of $\hat{\mu}$.
+
+
+## Bias Of Regression Estimates
+
+Suppose we have a time series process defined by:
+
+$$
+Y_t = \phi Y_{t-1}  + \epsilon_t
+$$
+
+In particular, $Y_{t-1} = \phi Y_{t-2} + \epsilon_{t-1}$, so the "regressor" $Y_{t-1}$ is correlated with the error component $\epsilon_{t-1}$. If we estimate $\phi$ using OLS, this will bias the estimate $\hat{\phi}$. To see this, observe the following identity:
+
+$$
+\begin{align*}
+Cov(X,Y) &= E[(X - E[X])(Y - E[Y])]\\
+Cov(X,Y) &= E[XY - XE[Y] - E[X]Y + E[X]E[Y]]\\
+Cov(X,Y) &=E[XY] - E[X]E[Y] - E[X]E[Y] + E[X]E[Y]\\
+Cov(X,Y) &=E[XY] - E[X]E[Y]\\
+E[XY] &= E[X]E[Y] + Cov(X,Y)
+\end{align*}
+$$
+
+The OLS estimator for $\phi$ is given by the formula:
+
+$$
+\hat{\phi} = \frac{\sum_{t=2}^T y_{t-1}y_t}{\sum_{t=2}^Ty_{t-1}^2}
+$$
+
+By definition of the data generation process, we have $y_t = \phi y_{t-1} + e_t$, so the estimate $\hat{\phi}$ is equal to $\phi$ plus a "bias" term:
+
+$$
+\begin{align*}
+\hat{\phi} &= \frac{\sum_{t=2}^T y_{t-1}y_t}{\sum_{t=2}^Ty_{t-1}^2}\\
+&= \frac{\sum_{t=2}^T y_{t-1}(\phi y_{t-1} + e_t)}{\sum_{t=2}^Ty_{t-1}^2}\\
+&= \frac{\sum_{t=2}^T \phi y_{t-1}^2 + y_{t-1}e_t}{\sum_{t=2}^Ty_{t-1}^2}\\
+&= \phi + \frac{\sum_{t=2}^T y_{t-1}e_t}{\sum_{t=2}^Ty_{t-1}^2}
+\end{align*}
+$$
+
+In particular, when we take expected values:
+
+$$
+\begin{align*}
+E[\hat{\phi}] &= \phi + E\left[  \frac{\sum_{t=2}^T y_{t-1}e_t}{\sum_{t=2}^Ty_{t-1}^2} \right]\\
+&= \phi + E\left[ \sum_{t=2}^T y_{t-1}e_t \right]E\left[\frac{1}{\sum_{t=2}^Ty_{t-1}^2} \right] 
+    + Cov \left(\sum_{t=2}^T y_{t-1}e_t, \frac{1}{\sum_{t=2}^Ty_{t-1}^2} \right)\\
+&= \phi + \left(\sum_{t=2}^T E[y_{t-1}]E[e_t]\right) E\left[\frac{1}{\sum_{t=2}^Ty_{t-1}^2} \right]
+    + Cov \left(\sum_{t=2}^T y_{t-1}e_t, \frac{1}{\sum_{t=2}^Ty_{t-1}^2} \right)\\
+&= \phi + 0 + Cov \left(\sum_{t=2}^T y_{t-1}e_t, \frac{1}{\sum_{t=2}^Ty_{t-1}^2} \right)\\
+&= \phi + Cov \left(\sum_{t=2}^T y_{t-1}e_t, \frac{1}{\sum_{t=2}^Ty_{t-1}^2} \right)\\
+\end{align*}
+$$
+
+where we used the fact that $y_{t-1}$ is independent from the future error $\epsilon_t$ to reduce the middle term to 0. Nonetheless, the fact that $y_{t-1}$ and $e_{t-1}$ are not independent makes the last covariance term non-zero. 
+
+We can demonstrate this bias via simulation. Define the true data generation process as:
+
+$$
+Y_t = 0.7Y_{t-1} + \epsilon_t
+$$
+
+```{r, warning = FALSE, message = FALSE}
+library(fpp3)
+library(DT)
+
+true_phi <- 0.7
+
+current_seed <- 1
+num_simulations <- 1e3
+simulation_index <- seq(1, num_simulations, by = 1)
+estimated_phis <- c()
+
+for (run in simulation_index){
+  set.seed(current_seed)
+  simulated_walk <- arima.sim(model = list(order = c(1,0,0), ar = true_phi), n = 50) %>% 
+    as_tsibble() %>% 
+    mutate(
+      value_lag1 = lag(value, 1)
+    )
+  
+  ols_model <- lm(
+    value ~ value_lag1 - 1,
+    data = simulated_walk
+  )
+  
+  estimated_phis <- c(estimated_phis, coef(ols_model)[[1]])
+  current_seed <- current_seed + 1
+}
+
+tibble(
+  run = simulation_index,
+  estimated_phi = estimated_phis
+) %>% 
+  ggplot(aes(estimated_phi)) + 
+  geom_histogram() + 
+  geom_vline(xintercept = mean(estimated_phis), linetype = "dashed", color = "blue") + 
+  geom_vline(xintercept = true_phi, color = "red")
+```
+
+So for this data generation process, the estimate $\hat{\phi}$ is biased toward 0, and will underestimate the true value $\phi$.
+
+## Problems With Forecasting
+
+Given the observations $y_1,\ldots, y_T$, we want to make statements about future values $y_{T+h}$ given the information from $y_1,\ldots, y_T$. In order to do this, we have to generate a estimates for the conditional mean $E[Y_{T+h}\,\,|\,\,y_1,\ldots, y_T]$ and estimates for the conditional variance $Var(Y_{T+h}\,\,|\,\,y_1,\ldots, y_T)$.
+
+For example, consider the process $Y_t = \phi Y_{t-1} + \epsilon_t$. The optimal forecast is given by:
+
+$$
+\begin{align*}
+E[Y_{T+h}\,\,|\,\,y_1,\ldots, y_T] &= \phi E[Y_{T+h-1}\,\,|\,\,y_1,\ldots, y_T] + E[\epsilon_t \,\,|\,\,y_1,\ldots, y_T]\\
+&= \phi E[Y_{T+h-1} \,\,|\,\,Y_T = y_T]\\
+&= \ldots \\
+&= \phi^h E[Y_T \,\,|\,\,y_1,\ldots, y_T]\\
+&= \phi^h y_T
+\end{align*}
+$$
+
+If we estimated $\phi$ using an OLS regression $\hat{\phi}$, the forecast generated by the model would be:
+
+$$
+E[Y_{T+h}\,\,|\,\,y_1,\ldots, y_T, \hat{\phi}] = \hat{\phi}^h y_T
+$$
+
+But since $\hat{\phi}$ is biased towards zero, there will be an expected difference between the optimal forecast and the model generated forecast:
+
+$$
+(\phi^h y_T) - (\hat{\phi}^h y_T) = (\phi^h - \hat{\phi}^h)y_T
+$$
+
+So the bias of the forecast will depend on the nature of $\phi$:
+
+1) If $|\phi| < 1$, then the difference between the optimal forecast and the model forecast will converge to 0 as $h\to \infty$.
+2) If $|\phi| \geq 1$, then the difference between the optimal forecast and the model forecast will diverge to $\infty$ as $h\to\infty$.
+
+In other words, even though the model generated forecast is biased, this forecast bias will generally die out if the process $Y_t$ is "stable" across time. On the other hand, the forecast bias will explode exponentially if the process $Y_t$ is not "stable".
+
+# Stationarity
+
+The fundamental issue with time series data lies in the fact that the random variables $(Y_t)_{t\in\mathbb{Z}}$ are not i.i.d. so observations $y_1,\ldots,y_T$ cannot be pooled into a single sample to generate unbiased statistical estimates. This means that not always possible to fit a "good" model and generate "good" forecasts. This begs the question: what kinds of processes *can* we fit a good model and generate good forecasts? 
+
+When we observe values of the process $y_1,\ldots,y_T$, what we are really doing is observing a "slice" of the process. If the process is "stable" across time, than the observe slice is representative of the entire process, allowing us to do statistics once more. This motivates the concept of a *stationary* process.
+
+## Stationary Processes
+
+A time series process $Y_t$ is **strictly stationary** if for any finite subset $t_1,\ldots, t_n$ of time points and any positive integer $\tau$, the joint distribution of $(Y_{t_1}, \ldots, Y_{t_n})$ is equal to the joint distribution of $(Y_{t_1 + \tau},\ldots, Y_{t_n + \tau})$. Heuristically, this just says that the data generation process is the same for both past and future data. Consequently, this permits us to fit a model on past data in order to generate estimates for future data.
+
+A time series process $Y_t$ is **weakly stationary** if the following conditions hold:
+
+1) $E[Y_t] = \mu$ for all $t$. In other words, the expected value of $E[Y_t]$ is some constant value for all time points $t$. Intuitively, this stipulates that there are no deterministic patterns in the data strictly as a function $f(t)$ of time. Consequently, this means that $Y_t$ cannot be trended or seasonal.
+
+2) $Cov(Y_t, Y_{t - \tau}) = \gamma(\tau)$ for all $t$. In other words, there is a single well-defined value $\gamma(\tau)$ between a time series $(Y_t)$ and the lagged series $(Y_{t-\tau})$. Intuitively, this says that the using $y_1,\ldots, y_T$ to predict $y_{T+1}$ should work equally as well as using $y_2, \ldots, y_{T+1}$ to predict $Y_{T+1}$.
+
+Weak stationarity is typically all we need for modeling, so we will say "stationary" to mean weakly stationary. Note that if $Y_t$ are i.i.d. then the process is both strictly stationary and weakly stationary.
+
+## Examples
+
+### White Noise Process
+
+The most trivial example of a stationary process is that of a white noise process, defined as:
+
+$$
+Y_t = \mu + \epsilon_t\\
+\epsilon_t \sim N(0,\sigma)
+$$
+
+In this case, the $Y_t$ are i.i.d. hence $Y_t$ is both stationary (both weakly and strictly).
+
+```{r, warning = FALSE, message=FALSE}
+library(fpp3)
+library(DT)
+
+mu <- 3.5
+time <- seq(1, 100, by = 1)
+Y <- mu + rnorm(time, mean = 0, sd = 1)
+
+tsibble(
+  time = time,
+  Y = Y,
+  index = time
+) %>% 
+  autoplot(Y) + 
+  geom_hline(yintercept = mu, linetype = "dashed", color = "blue") +
+  labs(title = "White Noise Process")
+```
+
+### Google Stock Price
+
+```{r, warning = FALSE, message=FALSE}
+google_stock_price <- gafa_stock %>% 
+  filter(
+    Symbol == "GOOG"
+  ) %>% 
+  index_by(
+    week = yearweek(Date, week_start = 1)
+  ) %>% 
+  summarise(
+    avg_close = mean(Close)
+  )
+
+google_stock_price %>% 
+  autoplot(avg_close) + 
+  labs(title = "Google Average Daily Closing Stock Price")
+```
+
+Notice that the data is clearly trended and is therefore non-stationary. In particular, expected value of Google's stock price in 2019 is likely to be much higher than Google's stock price in 2014. However, if we look at the *change* in daily stock, we get:
+
+```{r, warning=FALSE}
+google_stock_price %>% 
+  mutate(
+    first_difference = difference(avg_close, lag = 1)
+  ) %>% 
+  autoplot(first_difference) + 
+  labs(title = "First Difference - GOOG Average Closing Stock Price ")
+```
+
+The first difference of the data *does* look stationary.
+
+## Differences And Integration
+
+In the previous example, we saw that Google's daily closing stock price $Y_t$ is not stationary, but that the *changes* in stock price $Y_t - Y_{t-1}$ is stationary, so let us formalize this idea. For a time series process $Y_t$, the **first difference** is the difference between $Y_t$ and it's lag:
+
+$$
+D[Y_t] = Y_t - Y_{t-1}
+$$
+
+We can think of the first difference $D$ as a operator $D[-]$ which takes a time series $Y_t$ and returns a new time series process defined as $D[Y_t] = Y_t - Y_{t-1}$. If the time series $Y_t$ is trended, it *may be possible* to de-trend the time series via the operator $D$. For example, consider the time series $Y_t$ defined by:
+
+$$
+Y_t = \beta_0 + \beta_1 t + \epsilon_t\\
+\epsilon_t \sim N(0,1)
+$$
+
+If we take the first difference of $Y_t$, we get:
+
+$$
+\begin{align*}
+D[Y_t] &= Y_t - Y_{t-1}\\
+&= (\beta_0 + \beta_1 t + \epsilon_t) - (\beta_0 + \beta_1 (t-1) + \epsilon_{t-1})\\
+&= \beta_1 + \epsilon_t - \epsilon_{t-1}\\
+&= \beta_1 + D[\epsilon_t]
+\end{align*}
+$$
+
+where we have $D[\epsilon_t] = \epsilon_t - \epsilon_{t-1} \sim N(0, 2)$ for all $t$. This is just a white noise process with (constant) mean $\beta_1$. 
+
+The example above shows that the operator $D$ can be interpreted as a *derivative* (aka *differential operator*): the linearly trended time series $Y_t = \beta_0 + \beta_1 t + \epsilon_t$ has "derivative" $D[Y_t] = \beta_1 + D[\epsilon_t]$. This motivates the **$n$-th order difference**:
+
+$$
+D[Y_t] = Y_t - Y_{t-1}\\
+D^n[Y_t] = D\left[D^{n-1}[Y_t]\right]
+$$
+
+If we unpack the recursive formula for the first few values of $n$, we get:
+
+$$
+\begin{align*}
+D[Y_t] &= Y_t - Y_{t-1}\\
+D^2[Y_t] &= (Y_t - Y_{t-1}) - (Y_{t-1} - Y_{t-2}) = Y_t - 2Y_{t-1} + Y_{t-2}\\
+D^3[Y_t] &= (Y_t - 2Y_{t-1} + Y_{t-2}) - (Y_{t-1} - 2Y_{t-2} - Y_{t-3}) = Y_t - 3Y_{t-1} + 3Y_{t-2} - Y_{t-3}
+\end{align*}
+$$
+
+Proceeding inductively, we get that $D^n[Y_t]$ just follows a binomial expansion:
+
+$$
+D^n[Y_t] = \sum_{k=0}^n (-1)^k{n \choose k}Y_{t-k}
+$$
+
+The interpretation of $D$ as a derivative motivates the possibility of an *integral operator* $I[-]$ which "reverses" the process of $D$. For a time series $Y_t$, observe that:
+
+$$
+\begin{align*}
+Y_t &= Y_t - Y_{t-1} + Y_{t-1}\\
+&= Y_{t-1} + (Y_t - Y_{t-1})\\
+&= Y_{t-1} + D[Y_t]\\
+&= Y_{t-1} - Y_{t-2} + Y_{t-2} + D[Y_t]\\
+&= Y_{t-2} + D[Y_{t-1}] + D[Y_t]\\
+&= ...\\
+&= Y_{t_0} + \sum_{i = t_0 + 1}^t D[Y_{i}]
+\end{align*}
+$$
+
+Therefore, for a fixed positive integer $h$, define the **integration operator** $I_h[-]$ as:
+
+$$
+I_h[Y_t] = \sum_{i = t}^{t+h}Y_i
+$$
+
+We thus recover the "fundamental theorem of calculus":
+
+$$
+Y_{t+h} = Y_t + \sum_{i=t + 1}^{t+h} D[Y_i] = Y_t + I_h[D[Y_{t+h}]]
+$$
+
+We saw that even though a time series process $Y_t$ is not stationary, it's derivative $D[Y_t] = \beta_0 + D[\epsilon_t]$ *can* be stationary. The integral operator $I_h[-]$ also gives us a way to *recovery* $Y_t$ given its derivative $D[Y_t]$. Combining these two ideas, if a process $Y_t$ is non-stationary but has a stationary derivative $D[Y_t]$ we can:
+
+1) Start by taking the derivative $D[Y_t]$.
+2) Model the stationary process $D[Y_t]$ and generate forecasts for $D[Y_t]$.
+3) Recover forecasts for the original series $Y_t$ using integration.
+
+
+## The Backshift Operator
+
+The previous section showed that we will often need to manipulate time series processes $Y_t$ by taking lags. Therefore, it's convenient to develop some specialized notation for taking lags of a process $Y_t$. The **backshift operation** $B$ is defined as:
+
+$$
+BY_t = Y_{t-1}\\
+B^n Y_t = B[B^{n-1}Y_t] = Y_{t-n}
+$$
+
+In particular, we have:
+
+$$
+\begin{align*}
+D[Y_t] &= Y_t - Y_{t-1}\\
+&= Y_t - BY_t\\
+&= (1-B)Y_t
+\end{align*}
+$$
+
+As an example, consider the recursive process 
+
+$$
+Y_t = \phi_1 Y_{t-1} + \phi_2 Y_{t-2} + \epsilon_t
+$$
+
+where $\epsilon_t \sim N(0, 1)$. This can be expressed in terms of $Y_t$ using the backshift operator:
+
+$$
+\begin{align*}
+Y_t &= \phi_1 Y_{t-1} + \phi_2 Y_{t-2} + \epsilon_t \\
+Y_t - \phi_1 Y_{t-1} - \phi_2 Y_{t-2} &= \epsilon_t \\
+(1 - \phi_1 B - \phi_2B^2)Y_t &= \epsilon_t
+\end{align*}
+$$
+
+In particular, re-writing $Y_t$ in this form suggests that some kind of transformation can be applied to $Y_t$ to yield a white noise process (which is stationary).
+
+# Autoregressive (AR) Models
+
+## Model Specification
+
+An **autoregressive process of order $p$**, denoted by **AR(p)**, is a time series process of the form:
+
+$$
+Y_t = \phi_0 + \phi_1 Y_{t-1} + \ldots + \phi_p Y_{t-p} + \epsilon_t
+$$
+
+where $\epsilon_t$ are i.i.d. mean 0 and constant variance (aka white noise). Note that we can "unpack" the recursion by substituting $Y_{t-1} = \phi_1 Y_{t-2} + \ldots + \phi_p Y_{t-p-1} + \epsilon_{t-1}$ into the definition of $Y_t$ to get:
+
+$$
+\begin{align*}
+Y_t &= \phi_1 Y_{t-1} + \phi_2 Y_{t-2} \ldots + \phi_p Y_{t-p} + \epsilon_t \\
+&= \phi_1 (\phi_1 Y_{t-2} + \ldots + \phi_p Y_{t-p-1} + \epsilon_{t-1}) + \phi_2 Y_{t-2} + \ldots + \phi_p Y_{t-p} + \epsilon_t \\
+&= (\phi_1^2 + \phi_2)Y_{t-2} + (\phi_1\phi_2 + \phi_3)Y_{t-3} + \ldots + (\phi_1\phi_{p-1} + \phi_p)Y_{t-p} + \phi_1\phi_pY_{t-p-1} + \phi_1 \epsilon_{t-1} + \epsilon_t
+\end{align*}
+$$
+
+We can next substitute $Y_{t-2} =  \phi_1 Y_{t-3} + \ldots + \phi_p Y_{t-p-2} + \epsilon_{t-2}$ and continue in this manner to get an infinite sum:
+
+$$
+Y_t = \sum_{i = 0}^{\infty}\psi_i \epsilon_{t-i}
+$$
+
+## Examples
+
+### Stationary Example
+
+Consider the process $Y_t$ defined by:
+
+$$
+Y_t = 0.7 Y_{t-1} + 0.18Y_{t-2} + \epsilon_t
+$$
+
+```{r}
+set.seed(1738)
+
+time <- seq(1, 200, by = 1)
+y_prev1 <- runif(1, min = 0, max = 10)
+y_prev2 <- runif(1, min = 0, max = 10)
+Y <- c(y_prev2, y_prev1)
+
+for (t in time[3:length(time)]){
+  y_current <- 0.7 * y_prev1 + 0.18 * y_prev2 + rnorm(1, mean = 0, sd = 2)
+  Y <- c(Y, y_current)
+  
+  y_prev2 <- y_prev1
+  y_prev1 <- y_current
+}
+
+ar2_data <- tsibble(
+  time = time,
+  Y = Y,
+  index = time
+) 
+
+ar2_data %>% 
+  autoplot(Y) + 
+  labs(title = "Y(t) = 0.7Y(t-1) + 0.18Y(t-2) + epsilon(t)")
+```
+
+From an observe sample of the data, this process is stationary.
+
+```{r}
+ar2_data %>% 
+  ACF(Y) %>% 
+  autoplot() + 
+  labs(title = "ACF")
+```
+
+Notice that the ACF plot of the sample data shows significant correlation with lags 1 through  12, even though $Y_t$ is only an $AR(2)$ process. This is because $Y_t$ is correlated with $Y_{t-1}, Y_{t-2}$, but $Y_{t-1}, Y_{t-2}$ are themselves correlated with $Y_{t-3},Y_{t-4}$ and so on. This presents a rather interesting problem: if all we had was a sample of data points $y_1,\ldots, y_T$, how would we "deduce" that $Y_t$ is actually an $AR(2)$ process?
+
+The answer lies in the **partial autocorrelation function**, which is the autocorrelation between $Y_t$ and $Y_{t-k}$ but with the linear dependence on $Y_{t-1},\ldots, Y_{t-k+1}$ removed.
+
+```{r}
+ar2_data %>% 
+  PACF(Y) %>% 
+  autoplot() + 
+  labs(title = "PACF")
+```
+
+### Integrated Of Order 1
+
+Consider the time series process $Y_t$ defined by:
+
+$$
+Y_t = 0.8Y_{t-1} + 0.2Y_{t-2} + \epsilon_t
+$$
+
+```{r}
+set.seed(1738)
+
+time <- seq(1, 200, by = 1)
+y_prev1 <- runif(1, min = 0, max = 10)
+y_prev2 <- runif(1, min = 0, max = 10)
+Y <- c(y_prev2, y_prev1)
+
+for (t in time[3:length(time)]){
+  y_current <- 0.8 * y_prev1 + 0.2 * y_prev2 + rnorm(1, mean = 0, sd = 2)
+  Y <- c(Y, y_current)
+  
+  y_prev2 <- y_prev1
+  y_prev1 <- y_current
+}
+
+ar2_data <- tsibble(
+  time = time,
+  Y = Y,
+  index = time
+) 
+
+ar2_data %>% 
+  autoplot(Y) + 
+  labs(title = "Y(t) = 0.8Y(t-1) + 0.2Y(t-2) + epsilon(t)")
+```
+
+There seems to be a consistent downward trend in the sampled data, indicating that $Y_t$ is not stationary. However, if we take the first difference:
+
+```{r, warning = FALSE}
+ar2_data %>% 
+  mutate(
+    DY = difference(Y, lag = 1)
+  ) %>% 
+  autoplot(DY) + 
+  labs(title = "D[Y(t)]")
+```
+
+The first difference $D[Y_t]$ does look stationary. Thus we can potentially model $Y_t$ by modeling first $D[Y_t]$ and then integrating it to recover $Y_t$. For this reason $Y_t$ is called **integrated of order 1**.
+
+
+### Integrated Of Order 2
+
+Consider the processs $Y_t$ defined by:
+
+$$
+Y_t = 2Y_{t-1} - Y_{t-2} + \epsilon_t
+$$
+
+```{r}
+set.seed(1738)
+
+time <- seq(1, 200, by = 1)
+y_prev1 <- runif(1, min = 0, max = 10)
+y_prev2 <- runif(1, min = 0, max = 10)
+Y <- c(y_prev2, y_prev1)
+
+for (t in time[3:length(time)]){
+  y_current <- 2 * y_prev1 - y_prev2 + rnorm(1, mean = 0, sd = 2)
+  Y <- c(Y, y_current)
+  
+  y_prev2 <- y_prev1
+  y_prev1 <- y_current
+}
+
+ar2_data <- tsibble(
+  time = time,
+  Y = Y,
+  index = time
+) 
+
+ar2_data %>% 
+  autoplot(Y) + 
+  labs(title = "Y(t) = 2Y(t-1) - Y(t-2) + epsilon(t)")
+```
+
+The plot of the sample data shows that $Y_t$ is not stationary. If we take the first difference $D[Y_t]$, we get:
+
+```{r, warning = FALSE}
+ar2_data %>% 
+  mutate(
+    DY = difference(Y, lag=1)
+  ) %>% 
+  autoplot(DY) + 
+  labs(title = "D[Y(t)]")
+```
+
+This data still does not seem stationary, but we notice that differenced series looks just like previous example which was integrated of order 1. Therefore, we might be able to make it stationary by taking a second difference:
+
+```{r, warning = FALSE}
+ar2_data %>% 
+  mutate(
+    DY = difference(Y, lag=1),
+    D2_Y = difference(DY, lag=1)
+  ) %>% 
+  autoplot(D2_Y) + 
+  labs(title = "D^2[Y(t)]")
+```
+
+The second difference does seem stationary, so again we can attempt to model $Y_t$ by first modeling the second difference $D^2[Y_t]$, integrating to get $D[Y_t]$, then integrating again to recover $Y_t$. For this reason $Y_t$ is called **integrated of order 2**.
+
+### Explosive Process
+
+Finally, consider the process $Y_t$ defined by:
+
+$$
+Y_t = Y_{t-1} + 0.11Y_{t-2} + \epsilon_t
+$$
+
+```{r}
+set.seed(1738)
+
+time <- seq(1, 200, by = 1)
+y_prev1 <- runif(1, min = 0, max = 10)
+y_prev2 <- runif(1, min = 0, max = 10)
+Y <- c(y_prev2, y_prev1)
+
+for (t in time[3:length(time)]){
+  y_current <- y_prev1 + 0.11 * y_prev2 + rnorm(1, mean = 0, sd = 2)
+  Y <- c(Y, y_current)
+  
+  y_prev2 <- y_prev1
+  y_prev1 <- y_current
+}
+
+ar2_data <- tsibble(
+  time = time,
+  Y = Y,
+  index = time
+) 
+
+ar2_data %>% 
+  autoplot(Y) + 
+  labs(title = "Y(t) = Y(t-1) + 0.11Y(t-2) + epsilon(t)")
+```
+
+This process is not stationary; in fact it seems to "explode" at an exponential rate. We can attempt to take differences of multiple orders:
+
+```{r, warning = FALSE, fig.height = 8, fig.width = 6}
+ar2_data %>% 
+  mutate(
+    DY = difference(Y, lag=1),
+    D2_Y = difference(DY, lag=1),
+    D3_Y = difference(D2_Y, lag=1),
+    D4_Y = difference(D3_Y, lag=1)
+  ) %>% 
+  as_tibble() %>% 
+  pivot_longer(
+    cols = c(Y, DY, D2_Y, D3_Y, D4_Y),
+    names_to = "series",
+    values_to = "value"
+  ) %>% 
+  ggplot(aes(x = time, y = value)) + 
+  geom_line()+ 
+  facet_wrap(~series, ncol = 1, scales = "free_y")
+```
+
+Notice that taking differences doesn't seem to help at all here.
+
+
+## Unit Roots
+
+The previous 4 examples showed that an autoregressive process $Y_t$ can exhibit 3 possible behaviors:
+
+1) $Y_t$ is stationary.
+2) $Y_t$ is "polynomial" in which case taking successive "derivatives" $D^n[Y_t]$ will eventually return a stationary process.
+3) $Y_t$ is "exponential" in which case no amount of derivatives $D^n[Y_t]$ will return a stationary process.
+
+The 4 processes were defined by the coefficients on the autoregressive terms:
+
+$$
+\begin{align*}
+Y_t &= 0.17 Y_{t-1} + 0.18Y_{t-2} + \epsilon_t\\
+Y_t &= 0.8Y_{t-1} + 0.2Y_{t-2} + \epsilon_t \\
+Y_t &= 2Y_{t-1} - Y_{t-2} + \epsilon_t\\
+Y_t &= Y_{t-1} + 0.11Y_{t-2} + \epsilon_t
+\end{align*}
+$$
+
+The first process was stationary, the next two were "polynomial" (aka integrated), and the last process was "exponential" (aka explosive). At first glance, none of the coefficients seem egregiously large, so it is hard to determine what exactly makes a process stationary, integrated, or explosive. The answer to this question comes from considering the roots of *characteristic polynomial*.
+
+Using the backshift operator, $AR(p)$ models can be expressed as:
+
+$$
+\begin{align*}
+Y_t &= \phi_1 Y_{t-1} + \ldots + \phi_p Y_{t-p} + \epsilon_t \\
+Y_t - \phi_1 Y_{t-1} - \ldots - \phi_p Y_{t-p} &= \epsilon_t \\
+(1 - \phi_1 B - \ldots - \phi_p B^p)Y_t &= \epsilon_t\\
+\Phi(B)Y_t &= \epsilon_t
+\end{align*}
+$$
+
+The polynomial $\Phi(x) := 1 - \phi_1 x -\ldots -  \phi_p x^p$ is called the **characteristic polynomial** of $Y_t$ and its roots $\omega\in \mathbb{C}$ will dictate the nature of $Y_t$ in the following way:
+
+1) If all the roots $\omega$ live outside the complex unit disc, i.e. $|\omega|>1$ for all roots $\omega$, then $Y_t$ is stationary.
+2) If all but $d$ many roots $\omega_1,\ldots, \omega_d$ live the boundary of the unit disc, i.e. $|\omega_i| = 1$, while the remaining roots live outside the unit disc, then $Y_t$ is integrated of order $d$. The roots which live on the boundary $|\omega_i| = 1$ are called **unit roots**.
+3) If at least one of the roots $\omega$ lives inside the unit disc, i.e. there exists a root $\omega$ such that $|\omega| <1$, then $Y_t$ is explosive (and no amount of differencing will make it stationary).
+
+In practice, we won't actually know the values of the coefficients $\phi_i$, hence will not know the actual characteristic polynomial of the process. We thus have to conduct a hypothesis test of the existence of a unit root on a sample of observations $y_1,\ldots, y_T$. A number of tests are possible, but the two most popular tests are:
+
+1) Dickey-Fuller test
+2) KPSS test
+
+## Model Fitting
+
+Given a sample of observations $y_1,\ldots, y_T$, the order of the autocorrelation $p$ can be deduced by looking at the partial autocorrelation function (PACF). Once the order $p$ is deduced, an $AR(p)$ model is fitted onto the observed data using OLS to estimate the coefficients $\phi_1,\ldots, \phi_p$ by regressing $Y_t$ on its lags $Y_{t-1},\ldots, Y_{t-p}$.
+
+However, it is important to recall from the very first section that OLS estimates for autoregressive processes will be *biased towards 0*. This means the fitted model and the resulting forecast will also be biased downward. If the process is stationary, the forecast bias will converge to 0 as the forecast horizon $h$ gets large. But if the process is non-stationary, the forecast bias will explode exponentially as $h$ gets large.
+
+```{r}
+# simulate an AR(2) process
+# by picking 2 random phi-values between 0 and 0.9;
+# these parameters are treated as "unknown" and will
+# be estimated by the model
+set.seed(1738)
+
+phi <- runif(n = 2, min = 0, max = 0.9)
+
+ar2_data <- arima.sim(
+  model = list(order(2,0,0), ar = phi),
+  n = 100
+) %>% 
+  as_tsibble() %>% 
+  mutate(
+    lag1 = lag(value, n = 1),
+    lag2 = lag(value, n = 2)
+  )
+
+ar2_data %>% 
+  filter(index <= 80) %>% 
+  autoplot(value)
+```
+
+```{r}
+# Fit an AR(2) model with overall mean 0:
+ar2_model <- model(
+  .data = ar2_data %>% 
+    filter(index <= 80),
+  `AR(2)` = AR(value ~ order(2, fixed = list(constant = 0)))
+)
+
+report(ar2_model)
+```
+
+```{r}
+# check the fitted values agains the actual
+# phi values
+phi
+```
+
+```{r}
+# the forecast from the model will be
+# asymptotically flat as h gets large
+# which represents the expected stationarity
+# of the process
+ar2_model %>% 
+  forecast(
+    h = 20
+  ) %>% 
+  autoplot(
+    ar2_data
+  )
+```
+
+## Example: Google Stock Price
+
+```{r}
+google_stock_price %>% 
+  filter_index(
+     "2014 W01" ~ "2017 W52"
+  ) %>% 
+  autoplot(
+    avg_close
+  ) + 
+  labs(title = "Google Average Daily Closing Stock Price")
+```
+
+The data exhibts a trend, but differencing the data yields a process that *looks* stationary:
+
+```{r, warning = FALSE}
+google_stock_price %>% 
+  filter_index(
+     "2014 W01" ~ "2017 W52"
+  ) %>% 
+  mutate(
+    DY = difference(avg_close, lag = 1)
+  ) %>% 
+  autoplot(
+    DY
+  ) + 
+  labs(title = "Google Closing Price - First Difference")
+```
+
+### Unit Root Testing
+
+#### Augmented Dickey-Fuller
+
+This indicates the existence of a unit root. We can formally test this hypothesis using the Augmented Dickey-Fuller test:
+
+$$
+H_0 : \text{ the process has a unit root}\\
+H_A : \text{ the process is stationary }
+$$
+
+```{r}
+# Conduct an ADF test to determine
+# if the process has a unit root.
+# This can be done by calling the adf.test()
+# function from the tseries library;
+# adf.test() accepts a vector as input.
+#
+# Failure to reject null = unit root is very likely
+library(tseries)
+
+adf.test(
+  google_stock_price %>% 
+    filter_index(
+       "2014 W01" ~ "2017 W52"
+    ) %>% 
+    as_tibble() %>% 
+    pull(avg_close)
+)
+```
+
+The p-value is 0.4173 so we fail to reject the null hypothesis $H_0$. This implies that Google's daily closing stock price data has a unit root. Let's contrast this with what happens when we run the Augmented Dickey-Fuller test on the *first difference* of the series:
+
+```{r}
+# ADF test on first difference;
+# result shows unit root is unlikely 
+# after differencing
+adf.test(
+  google_stock_price %>% 
+    filter_index(
+     "2014 W01" ~ "2017 W52"
+    ) %>% 
+    mutate(
+      DY = difference(avg_close, lag = 1)
+    ) %>% 
+    filter(
+      !is.na(DY)
+    ) %>% 
+    as_tibble() %>% 
+    pull(DY)
+)
+```
+
+The p-value is incredibly small allowing us to reject the null hypothesis and accept the alternative that the first difference $D[y_t]$ is stationary. This isn't too surprising given the above plot of the first difference.
+
+#### KPSS
+
+We can also test for unit roots using the KPSS test:
+
+$$
+H_0 : \text{ the process is stationary or trend stationary }\\
+H_A : \text{ the process has a unit root }
+$$
+
+Specifically, the null hypothesis of the KPSS test is that $Y_t$ is a process of the form $Y_t = \beta_0 + \beta_1 t + \eta_t$ where $\eta_t$ is a stationary process. The alternative hypothesis is that $Y_t$ is a process of the form $Y_t = \beta_0 + \beta_1 t + \eta_t + \sum_{i \leq t}u_i$. Thus we can start by regression $Y_t$ against the time index $t$, then regress the residuals against its own lags to determine if the residuals follow a random walk.
+
+```{r}
+# KPSS test can be run
+# by calling the features()
+# function from fabletools
+# and setting the argument
+google_stock_price %>% 
+  filter_index(
+     "2014 W01" ~ "2017 W52"
+  ) %>% 
+  features(
+    avg_close
+    ,
+    unitroot_kpss
+  )
+```
+
+```{r}
+# KPSS test on first difference;
+# results show no evidence of unit root
+# after differencing
+google_stock_price %>% 
+  filter_index(
+     "2014 W01" ~ "2017 W52"
+  ) %>% 
+  mutate(
+    DY = difference(avg_close, lag = 1)
+  ) %>% 
+  features(
+    DY
+    ,
+    unitroot_kpss
+  )
+```
+
+### Determining The Order
+
+```{r}
+google_stock_price %>% 
+  PACF(avg_close) %>% 
+  autoplot()
+```
+
+The PACF function shows that the autocorrelation in Google's daily closing stock price is mostly due to a lag 1 correlation. This implies an $AR(1)$ model is appropriate.
+
+```{r}
+google_stock_price %>% 
+  mutate(
+    DY = difference(avg_close, lag = 1)
+  ) %>% 
+  PACF(DY) %>% 
+  autoplot()
+```
+
+When looking at the PACF of the first difference $D[y_t]$, we see that lag 2 has the strongest correlation. We thus suspect an $AR(2)$ model might also work well.
+
+### Model Fitting
+
+```{r}
+goog_ar1_model <-  model(
+  .data = google_stock_price %>% 
+    filter_index(
+       "2014 W01" ~ "2017 W52"
+    ) %>% 
+    mutate(
+      DY = difference(avg_close, lag = 1)
+    ) %>% 
+    filter(
+      !is.na(DY)
+    )
+  , 
+  `AR(1)` = AR( avg_close ~ order(1, fixed = list(constant = 0))),
+  `Integrated AR(1)` = ARIMA( avg_close ~ pdq(p = 1, d = 1, q = 0))
+)
+
+glance(goog_ar1_model)
+```
+
+
+```{r}
+goog_ar1_model %>% 
+  forecast(
+    h = 104
+  ) %>% 
+  autoplot(
+    google_stock_price,
+    level = NULL
+  )
+```
+
+
+
+# Moving Average (MA) Models
+
+## Model Specification
+
+A **moving average processs of order $q$**, denoted $MA(q)$, is a time series process of the form:
+
+$$
+Y_t = c + \epsilon_t + \theta_1\epsilon_{t-1} + \ldots + \theta_q \epsilon_{t-q}
+$$
+
+Where the $\epsilon_t$ are i.i.d with mean 0. Intuitively, an $MA(q)$ process represents a system where the observed value $Y_t$ is a weighted sum of past shocks to the system. Note that since $q$ is finite, shocks to the system will eventually die out. For example, if $Y_t$ is GDP of the US at time $t$, then $\epsilon_{t-i}$ might represent a technological innovation which increases the GDP. This innovation will have a lasting impact for some time, but will eventually die out as new innovations make it obsolete.
+
+Note that since $q$ is finite, an $MA(q)$ process is always stationary; the impact of $\epsilon_{t-i}$ will always die out after $p$ time steps regardless of the size of the coefficient $\theta_i$. If we permit $q$ to be infinite, then the shocks $\epsilon_t$ will never fully die out, leading to the possibility of non-stationarity. But permitting $q$ to be infinite allows us to represent an autoregressive processes an $MA(\infty)$ process:
+
+$$ 
+\begin{align*}
+Y_t &= \epsilon_t + \sum_{i=1}^p \phi_i Y_{t-i} \\
+&= \epsilon_t + \sum_{i=1}^p \phi_i \epsilon_i + \sum_{i=1}^p\sum_{j=1}^p\phi_jY_{t-i-j}\\
+&= \epsilon_t + \sum_{i=1}^p \phi_i \epsilon_{t-i} + \sum_{i=1}^p\sum_{j=1}^p \phi_i\phi_j\epsilon_{t-i-j} 
+    + \sum_{i=1}^p\sum_{j=1}^p\sum_{k=1}^p\phi_jY_{t-i-j}\\
+&= \ldots \\
+&= \epsilon_t + \sum_{i = 1}^{\infty}\psi_i  \epsilon_{t-i}
+\end{align*}
+$$
+
+## Example: MA(2) Process
+
+As an example, we simulate an $MA(2)$ process of the form:
+
+$$
+Y_t = \epsilon_t + 1.2\epsilon_{t-1} + 0.4\epsilon_{t-2}
+$$
+
+```{r}
+set.seed(1738)
+
+ma2_data <- arima.sim(
+  model = list(order = c(0,0,2), ma = c(1.2, 0.4)),
+  n = 100
+) %>% 
+  as_tsibble()
+
+ma2_data %>% 
+  autoplot(value) + 
+  labs(title = "MA(2) Process")
+```
+
+The PACF of this series looks like this:
+
+```{r}
+ma2_data %>% 
+  PACF(value) %>% 
+  autoplot() + 
+  labs(title = "PACF - MA(2) Process")
+```
+
+## Model Fitting
+
+```{r}
+set.seed(1738)
+
+ma1 <- runif(1, -2, 2)
+ma2 <- runif(1, -2, 2)
+
+ma2_data <- arima.sim(
+  model = list(order = c(0,0,2), ma = c(ma1, ma2)),
+  n = 100
+) %>% 
+  as_tsibble()
+
+ma2_data %>% 
+  autoplot(value) + 
+  labs(title = "MA(2) Process")
+```
+
+```{r}
+ma2_model <- model(
+  .data = ma2_data %>% 
+    filter(index <= 90),
+  `MA(2)` = ARIMA( value ~ pdq(0, 0, 2), )
+)
+
+report(ma2_model)
+```
+
+```{r}
+c(ma1, ma2)
+```
+
+```{r}
+ma2_model %>% 
+  forecast(
+    h = 10
+  ) %>% 
+  autoplot(ma2_data)
+```
+
+# ARMA And ARIMA Models
+
+## Model Specification 
+
+An **autoregressive moving average process of order $(p,q)$**, denoted $ARMA(p,q)$, is a time series process of the form:
+
+$$
+Y_t = c + \epsilon_t + \left( \sum_{i=1}^p \phi_i Y_{t-i} \right) + \left(\sum_{j=1}^q \theta_j \epsilon_{t-j} \right)
+$$
+
+An $ARMA(p,q)$ process is just a combination of an $AR(p)$ and $MA(q)$ process. The usual analysis regarding unit roots apply. Let $Y_t$ be an $ARMA(p,q)$ process and $\Phi(x)$ be the characteristic polynomial of the $AR(p)$ component, then:
+
+1) If $|\omega| > 1$ for all the roots $\omega$ of $\Phi(x)$, then the $ARMA(p,q)$ process is stationary.
+2) If $|\omega_1| = |\omega_2| = \ldots = |\omega_d| = 1$ for roots $\omega_1,\ldots, \omega_d$ and the rest of the roots satisfy $|\omega| > 1$, then the $ARMA(p,q)$ process $Y_t$ is integrated of order $d$.
+3) If $|\omega| < 1$ for any root $\omega$, then the $ARMA(p,q)$ process $Y_t$ is explosive.
+
+Thus, the usual tests for unit roots still apply and can be used to determine if the process is stationary or requires differencing. Note that if $Y_t$ is an $ARMA(p,q)$ process, then differences $D^n[Y_t]$ are also $ARMA(p,q)$ processes:
+
+$$
+\begin{align*}
+D[Y_t] &= (\epsilon_t - \epsilon_{t-1}) + \sum_{i=1}^p \phi_i (Y_{t-i} - Y_{t-i-1}) + \sum_{j=1}^q \theta_j (Y_{t-j} - Y_{t-j-1})\\
+&= D[\epsilon_t] + \sum_{i=1}^p \phi_i D[Y_{t-i}] + \sum_{j=1}^q \theta_j D[Y_{t-j}]
+\end{align*}
+$$
+
+Proceeding inductively will show that $D^n[Y_t]$ is also $ARMA(p,q)$.
+
+This motivates us to generalize one level further: an **autoregressive integrated moving average process of order $(p,d,q)$**, denoted $$ARIMA(p,d,q)$$, is an $ARMA(p,q)$ process $Y_t$ such that $d$ is the least integer for which $D^d[Y_t]$ is stationary. That is:
+
+$$
+D^d[Y_t] = D^d[\epsilon_t] + \sum_{i=1}^p \phi_i D^d[Y_{t-i}] + \sum_{j=1}^q \theta_j D^d[Y_{t-j}]
+$$
+
+is stationary. We can apply the usual unit root tests to determine the integration order $d$. 
+
+
+## Model Fitting
+
+An $ARIMA(p,d,q)$ model is fitted by first determining the order of integration $d$ by via an iterative loop. Start by setting $d = 0$, then:
+
+1) Test the series $D^d[Y_t]$ for the existence of a unit root. If the series is determined to be stationary, end the loop.
+2) Increment $d$ by 1 and return to step 1.
+
+Unlike the simpler $AR(p)$ and $MA(q)$ processes, it is typically very hard to determine the order of the $p$ and $q$ in a combined ARIMA process. This is because the ACF and PACF plots will generally look similar for all processes where $p > 0$ and $q > 0$ at the same time. Therefore, we typically will treat $p$ and $q$ as hyperparameters where the optimal combination $(p,q)$ must searched for over a parameter grid. So for each candidate combination $(p,q)$, we do the following:
+
+1) Fit an $ARMA(p,q)$ model to the series $D^d[Y_t]$ via maximum likelihood estimation.
+2) Compute the Aikake Information Criterion (AIC) and/or Bayesian Information Criterion (BIC) for the fitted model.
+
+The optimal choice of $(p,q)$ is selected by choosing the model with the smallest AIC (or BIC).
+
+```{r}
+egypt_exports <- global_economy %>% 
+  filter(Code == "EGY") 
+
+egypt_exports %>% 
+  filter(
+    Year <= 2010
+  ) %>%
+  autoplot(Exports) + 
+  labs(title = "Egyptian Exports", y = "% of GDP")
+```
+
+```{r}
+egypt_arima_model <- model(
+  .data = egypt_exports %>% filter(Year <= 2010)
+  ,
+  `ARIMA` = ARIMA(Exports)
+)
+
+report(egypt_arima_model)
+```
+
+```{r}
+egypt_arima_model %>% 
+  forecast(
+    h = 7
+  ) %>% 
+  autoplot(
+    egypt_exports
+  ) + 
+  labs(title = "Egyptian Exports - ARIMA Forecast")
+```
+
+Notice in particular the ARIMA forecast predicts that Egyptian exports will continue to decline for a few more years due to the current downward trend, but will "bounce back" towards an equilibrium point.
+
+# Seasonal ARIMA
+
+A **seasonal ARIMA process of order $(p,d,q),(P,D,Q)$** with period $m$, aka **SARIMA**, is just an ARIMA process with a seasonal component:
+
+$$
+Y_t = c + \epsilon_t + \left( \sum_{i=1}^p \phi_i Y_{t-i} \right) + \left(\sum_{j=1}^q \theta_j \epsilon_{t-j} \right)
+  + \left( \sum_{k=1}^P \tilde{\phi}_k Y_{t-mk} \right) + \left(\sum_{l=1}^Q \theta_j \epsilon_{t-ml} \right)
+$$
+
+where the $ARMA(p,q)$ component is integrated of order $d$ and the seasonal $ARMA(P,Q)$ component is integrated of order $D$.
+
+---
+
+# References
+
+[FPP3 - Chapter 9: ARIMA Models](https://otexts.com/fpp3/arima.html)
+
+JP Renne, Alain Monfort. [Introduction to Time Series - Chapter 5: Non-stationary processes](https://jrenne.github.io/TimeSeries_Bookdown/NonStat.html)
+
+Aaron Smith. [Unbiasedness of OLS in the Linear Regression Model](https://files.asmith.ucdavis.edu/Unbiasedness.pdf)
+
+[(Stackexchange) Random Walk Estimatation With AR(1)](https://stats.stackexchange.com/questions/143810/random-walk-estimation-with-ar1)
+
+Rauli Susmel. [Time Series: Stationarity, AR(p) and MA(q)](https://www.bauer.uh.edu/rsusmel/phd/ec2-3.pdf)
+
+Michiel J. L. de Hoon. [Parameter Estimation Of Nearly Non-Stationary Autoregressive Processes](http://bonsai.hgc.jp/~mdehoon/publications/Delft.pdf)
+
+[(Wikipedia) Augmented Dickey-Fuller test](https://en.wikipedia.org/wiki/Augmented_Dickey%E2%80%93Fuller_test)
+
+[(Geeksforgeeks) How to Perform an Augmented Dickey-Fuller Test in R](https://www.geeksforgeeks.org/how-to-perform-an-augmented-dickey-fuller-test-in-r/)
+
+---
+
