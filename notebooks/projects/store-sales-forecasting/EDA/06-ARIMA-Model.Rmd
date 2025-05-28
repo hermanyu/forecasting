@@ -1,0 +1,376 @@
+---
+title: "05: Exponential Smoothing (ETS) Model"
+author: "Herman Yu"
+output:
+  rmdformats::downcute
+---
+
+
+# Introduction
+
+This notebook will explore the performance of ARIMA models. 
+
+# Setup
+
+## Libraries and Global Variables
+
+```{r, warning=FALSE, message=FALSE}
+options(scipen=999)
+DATA_DIR <- Sys.getenv("DATA_DIR")
+DATA_PATH <- paste0(DATA_DIR, "/store-sales-time-series/train.csv")
+
+library(fpp3)
+library(readr)
+library(DT)
+library(scales)
+```
+
+## Load Data
+```{r, warning=FALSE, message=FALSE}
+# The store sales data set has 1 record
+# per date x family x store_nbr.
+# We won't be using the onpromotion variable
+# for the naive model.
+df <- read_csv(DATA_PATH) %>% 
+  as_tsibble(
+    key = c(family, store_nbr),
+    index = date
+  ) %>% 
+  select(
+    -c(
+      id
+    )
+  )
+
+df %>% 
+  head(5) %>% 
+  datatable()
+```
+
+```{r, message=FALSE, warning=FALSE}
+# check how many days into future we need to forecast
+# for the test data set
+df_submit <- read_csv(paste0(DATA_DIR, "/store-sales-time-series/test.csv")) 
+
+df_submit %>% 
+  summarise(
+    start_date = min(date),
+    end_date = max(date)
+  )
+```
+
+## The Evaluation Criterion
+
+The evaluation criterion is the **root mean squared logarithmic error** defined as:
+
+$$
+RMSLE := \sqrt{\frac{1}{n}\sum_{t=T+1}^{T+n} \left( \log(1 + \hat{y}_t) - \log(1 + y_t) \right)^2} 
+$$
+
+```{r}
+rmsle <- function(df, actuals = "sales", forecast = "forecast"){
+  df %>% 
+    mutate(
+      squared_log_error = ( log(1 + !!sym(actuals)) - log(1 + !!sym(forecast)) )^2
+    ) %>% 
+    summarise(
+      rmsle = sqrt(mean(squared_log_error))
+    )
+}
+```
+
+```{r}
+prepare_forecast_for_evaluation <- function(df_forecast, df_actuals, forecast_var_name = ".mean"){
+  df <- df_actuals %>% 
+    as_tibble() %>% 
+    left_join(
+      df_forecast %>% 
+        as_tibble() %>% 
+        select(
+          date,
+          family,
+          store_nbr,
+          forecast = {forecast_var_name}
+        )
+      ,
+      by = c("date", "family", "store_nbr")
+    ) %>% 
+    mutate(
+      forecast = ifelse(
+        (forecast < 0) | (is.na(forecast)), 
+        0, 
+        forecast
+      )
+    )
+    
+  return(df)
+  
+}
+```
+
+## Data Preparation
+
+The sales data in our data set does not start at the same time for all families and stores. The existence of leading 0's will potentially lead to severe bias when estimating the parameters of the ETS models (such as the trend and seasonality).
+
+```{r}
+# Submission data asks us  to forecast 16 days ahead
+# from 8/15/2017 to 8/31/2017.
+# So we hold out 16 days from our full training set
+# into a testing set for model evaluation
+train_start_date <- "2017-04-20"
+train_test_split_date <- "2017-07-30"
+
+df_train <- df %>% 
+  filter(
+    date >= train_start_date
+  ) %>% 
+  filter(
+    date <= train_test_split_date
+  ) %>% 
+  fill_gaps(sales = 0)
+
+df_test <- df %>% 
+  filter(
+    date > train_test_split_date
+  )
+
+h_length <- df_test %>% 
+  distinct(date) %>% 
+  pull() %>% 
+  length()
+```
+
+
+# Analysis
+
+Although the formula for an $ARMA(p,q)$ model does not explicitly require stationarity, estimation of coefficients will typically be biased downwards for the $AR(p)$ process leading also to biased forecasts. For non-stationary process, the forecast bias blows up exponentially as the forecast horizon $h$ gets large. However, for stationary processes, the forecast bias will decrease to 0. For this reason, we typically want to avoid fitting ARMA models to non-stationary processes.
+
+To check whether the processes are stationary, we can run a KPSS test for a unit root. The null hypothesis is stationary while the alternative is non-stationary. Note that multiple testing will inflate the false positive rate, *but* that is ok: a false negative (declaring stationary when non-stationary) is much more problematic than a false positive (declaring non-stationary when stationary), so we actually prefer false positives over false negatives. The penalty for a false negative is an unreliable model, while the penalty for a false positive is just extra compute cost.
+
+```{r}
+unit_root_suspects <- df_train %>% 
+  features(
+    sales,
+    unitroot_kpss
+  ) %>% 
+  filter(
+    kpss_pvalue < 0.05
+  ) %>% 
+  arrange(desc(kpss_stat))
+
+unit_root_suspects
+```
+
+Of the 1,500 individual time series, 308 of them exhibit some evidence of non-stationarity. It's possible that a unit root exists for these processes, so we take the first difference and run the KPSS test again.
+
+```{r}
+second_unit_root_suspects <- df_train %>% 
+  inner_join(
+    unit_root_suspects %>% 
+      select(family, store_nbr)
+    ,
+    by = c("family", "store_nbr")
+  ) %>% 
+  group_by(family, store_nbr) %>% 
+  mutate(
+    DY = difference(sales, lag = 1)
+  ) %>% 
+  ungroup() %>% 
+  features(
+    DY,
+    unitroot_kpss
+  ) %>% 
+  filter(
+    kpss_pvalue < 0.1
+  ) %>% 
+  arrange(kpss_pvalue)
+
+second_unit_root_suspects
+```
+
+We should check the time series plots to verify the behavior ourselves:
+
+```{r}
+df_train %>% 
+  inner_join(
+    second_unit_root_suspects
+    ,
+    by = c("family", "store_nbr")
+  ) %>% 
+  autoplot(sales)
+```
+
+The time series plots for store 33 shows that school and office supplies sales for this store constant 0, explaining the apparent first order trend. The series for store 45 shows a massive spike around late July and early August, which likely coincides with back-to-school shopping. It is unlikely that this trend will continue up further, so a second order difference does not make sense here.
+
+```{r}
+df_train %>% 
+  inner_join(
+    second_unit_root_suspects
+    ,
+    by = c("family", "store_nbr")
+  ) %>% 
+  group_by(family, store_nbr) %>% 
+  mutate(
+    DY = difference(sales, lag = 1)
+  ) %>% 
+  ungroup() %>% 
+  autoplot(DY)
+```
+
+
+The first difference school and office supplies sales for stores 33 and 45 does not seem trended, indicating again that a second order model is not likely.
+
+```{r}
+integration_orders <- df_train %>% 
+  distinct(family, store_nbr) %>% 
+  left_join(
+    unit_root_suspects %>% 
+      select(
+        family,
+        store_nbr,
+        kpss_pvalue
+      )
+    ,
+    by = c("family", "store_nbr")
+  ) %>% 
+  mutate(
+    d = case_when(
+      !is.na(kpss_pvalue) ~ 1,
+      TRUE ~ 0
+    )
+  ) %>% 
+  select(
+    family,
+    store_nbr,
+    d
+  )
+
+integration_orders
+```
+
+
+# SARIMA(p, 2, q)
+
+We have 3 classes of ARIMA models based on the integration order $d = 1, 2,3$. We thus should break out the series by their integration order $d$. This will save on compute costs since we won't have to search through the parameter space of $d$ for the optimal model. We start with the smallest class $d=2$.
+
+## Model Specification
+
+The $SARIMA(p, 2, q, P, D, Q)$ model is specified by:
+
+$$
+\begin{align*}
+D^2[Y_t] = c + D^2[\epsilon_t] + \sum_{i=1}^p \phi_i D^2[Y_{t-i}] + \sum_{j=1}^q \theta_j D^2[\epsilon_{t-j}] + \sum_{k=1}^P \tilde{\phi}_k D^2[Y_{t-k}] + \sum_{l=1}^Q \tilde{\theta_l} D^2[\epsilon_{t-l}]
+\end{align*}
+$$
+
+The forecast for $y_{T+h}$ is then obtained by first forecasting $D^2[y_T],\ldots, D^2[y_{T+h}]$, then integrating the differences:
+
+$$
+D[y_{T+h}] = D[y_T] + \sum_{i = 1}^h D^2[y_{T+i}]\\
+Y_{T+h} = Y_T + \sum_{i=1}^h D[Y_{T+i}]
+$$
+
+## Model Fitting
+
+```{r}
+sarima_d1_model <- model(
+  .data = df_train %>% 
+    inner_join(
+      integration_orders %>% 
+        filter(d == 1)
+      ,
+      by = c("family", "store_nbr")
+    )
+  ,
+  `ARIMA` = ARIMA(
+    sales ~ pdq(p = 0:2, d = 2, q = 0:2) + PDQ(P = 0:1, Q = 0:1, period = 7)
+  )
+)
+
+sarima_d1_model %>% 
+  glance()
+```
+
+## Model Evaluation
+
+```{r}
+sarima_d1_forecast <- sarima_d1_model %>% 
+  forecast(
+    h = h_length
+  )
+```
+
+```{r}
+sarima_d1_forecast %>% 
+  accuracy(
+    df_test %>% 
+      inner_join(
+        integration_orders %>% 
+          filter(d == 1)
+        ,
+        by = c("family", "store_nbr")
+      )
+  ) %>% 
+  mutate(
+    across(where(is.numeric), ~round(., 4))
+  ) %>% 
+  select(
+    family,
+    store_nbr,
+    RMSE,
+    MAE,
+    MAPE
+  ) %>% 
+  filter(
+    is.finite(MAPE)
+  ) %>% 
+  arrange(desc(MAPE))
+```
+
+
+
+```{r}
+sarima_d1_forecast %>% 
+  filter(
+    store_nbr == 41,
+    family == "GROCERY II"
+  ) %>% 
+  autoplot(
+    bind_rows(
+      df_train,
+      df_test
+    ) %>% 
+      filter(
+        store_nbr == 41,
+        family == "GROCERY II"
+      )
+  )
+```
+
+```{r}
+sarima_d1_forecast %>% 
+  filter(
+    store_nbr == 2,
+    family == "DAIRY"
+  ) %>% 
+  autoplot(
+    bind_rows(
+      df_train,
+      df_test
+    ) %>% 
+      filter(
+        store_nbr == 2,
+        family == "DAIRY"
+      )
+  )
+```
+
+
+
+
+
+
+
+
+---
+
