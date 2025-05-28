@@ -1,0 +1,478 @@
+---
+title: "05: Exponential Smoothing (ETS) Model"
+author: "Herman Yu"
+output:
+  rmdformats::downcute
+---
+
+
+# Introduction
+
+This notebook will explore the performance of exponential smoothing (aka ETS) models. The acronym "ETS" stands for (E)rror-(T)rend-(S)eason; these areso-called **state space models** which describe the data generation process using a system of state equations. ETS models come in a variety of flavors, for example:
+
+* ETS(A, N, N): exponential smoothing with just additive errors. This is called **simple exponential smoothing**.
+* ETS(A, N, A): exponential smoothing with additive errors, no trend, and additive seasonality.
+* ETS(A, Ad, A): exponential smoothing with additive errors, damped additive trend, and additive seasonality. This is the additive **Holt-Winters** model.
+* ETS(M, N, M): exponential smoothing with multiplicative errors, no trend, and multiplicative seasonality. This model is generally appropriate when the if we notice that the series gets more volatile (large swings) when $y_t$ is large.
+
+For an ETS(e, t, s) model, the parameters e, t, and s are hyperparameters which must be tuned during model selection. Consequently, we create 2 holdout sets: the first holdout set to select the optimal hyperparameters and the second holdout set to gauge model performance. 
+
+# Setup
+
+## Libraries and Global Variables
+
+```{r, warning=FALSE, message=FALSE}
+options(scipen=999)
+DATA_DIR <- Sys.getenv("DATA_DIR")
+DATA_PATH <- paste0(DATA_DIR, "/store-sales-time-series/train.csv")
+
+library(fpp3)
+library(readr)
+library(DT)
+library(scales)
+```
+
+## Load Data
+```{r, warning=FALSE, message=FALSE}
+# The store sales data set has 1 record
+# per date x family x store_nbr.
+# We won't be using the onpromotion variable
+# for the naive model.
+df <- read_csv(DATA_PATH) %>% 
+  as_tsibble(
+    key = c(family, store_nbr),
+    index = date
+  ) %>% 
+  select(
+    -c(
+      id
+    )
+  )
+
+df %>% 
+  head(5) %>% 
+  datatable()
+```
+
+```{r, message=FALSE, warning=FALSE}
+# check how many days into future we need to forecast
+# for the test data set
+df_submit <- read_csv(paste0(DATA_DIR, "/store-sales-time-series/test.csv")) 
+
+df_submit %>% 
+  summarise(
+    start_date = min(date),
+    end_date = max(date)
+  )
+```
+
+## The Evaluation Criterion
+
+The evaluation criterion is the **root mean squared logarithmic error** defined as:
+
+$$
+RMSLE := \sqrt{\frac{1}{n}\sum_{t=T+1}^{T+n} \left( \log(1 + \hat{y}_t) - \log(1 + y_t) \right)^2} 
+$$
+
+```{r}
+rmsle <- function(df, actuals = "sales", forecast = "forecast"){
+  df %>% 
+    mutate(
+      squared_log_error = ( log(1 + !!sym(actuals)) - log(1 + !!sym(forecast)) )^2
+    ) %>% 
+    summarise(
+      rmsle = sqrt(mean(squared_log_error))
+    )
+}
+```
+
+```{r}
+prepare_forecast_for_evaluation <- function(df_forecast, df_actuals, forecast_var_name = ".mean"){
+  df <- df_actuals %>% 
+    as_tibble() %>% 
+    left_join(
+      df_forecast %>% 
+        as_tibble() %>% 
+        select(
+          date,
+          family,
+          store_nbr,
+          forecast = {forecast_var_name}
+        )
+      ,
+      by = c("date", "family", "store_nbr")
+    ) %>% 
+    mutate(
+      forecast = ifelse(
+        (forecast < 0) | (is.na(forecast)), 
+        0, 
+        forecast
+      )
+    )
+    
+  return(df)
+  
+}
+```
+
+```{r}
+var_name <- "family"
+
+df %>% 
+  as_tibble() %>% 
+  select(
+    everything(),
+    new_var = {var_name}
+  )
+```
+
+## Data Preparation
+
+The sales data in our data set does not start at the same time for all families and stores. The existence of leading 0's will potentially lead to severe bias when estimating the parameters of the ETS models (such as the trend and seasonality).
+
+```{r}
+# Submission data asks us  to forecast 16 days ahead
+# from 8/15/2017 to 8/31/2017.
+# We will holdout 32 total days:
+# - The first 16 days to use for hyperparameter tuning
+# - The last 16 days to use for model evaluation
+train_start_date <- "2017-04-20"
+train_val_split_date <- "2017-07-14"
+val_test_split_date <- "2017-07-30"
+
+df_train <- df %>% 
+  filter(
+    date >= train_start_date
+  ) %>% 
+  filter(
+    date <= train_val_split_date
+  ) %>% 
+  fill_gaps(sales = 0)
+
+df_val <- df %>% 
+  filter(
+    date > train_val_split_date,
+    date <= val_test_split_date
+  )
+
+df_test <- df %>% 
+  filter(
+    date > val_test_split_date
+  )
+
+h_length <- df_test %>% 
+  distinct(date) %>% 
+  pull() %>% 
+  length()
+```
+
+
+# ETS(A,Ad,A)
+
+## Model Specification
+
+The first model we explore is exponential smoothing with additive error, damped additive trend, and additive seasonality. This model specifies the data generation process using a set of state equations:
+
+$$
+\begin{align*}
+Y_t &= L_{t-1} + \phi B_{t-1} + S_{t-p} + \epsilon_t\\
+L_t &= L_{t-1} + \phi B_{t-1} + \alpha \epsilon_t\\
+B_t &= \phi B_{t-1} + \beta \epsilon_t\\
+S_t &= S_{t-p} + \gamma \epsilon_t
+\end{align*}
+$$
+
+## Model Fitting
+
+```{r}
+sales_ets_AAdA <- model(
+  .data = df_train,
+  `ETS` = ETS( sales ~ error("A") + trend("Ad") + season("A") )
+)
+```
+
+```{r}
+ets_AAdA_forecast <- sales_ets_AAdA %>% 
+  forecast(
+    h = h_length
+  )
+```
+
+
+```{r, fig.height = 20, fig.width = 12}
+ets_AAdA_forecast %>% 
+  filter(
+    family == "GROCERY I"
+  ) %>% 
+  autoplot(
+    df %>% 
+      filter(
+        date >= train_start_date,
+        date <= val_test_split_date
+      )
+  ) + 
+  facet_wrap(~store_nbr, ncol = 3, scales = "free_y") + 
+  labs(title = "Grocery I Sales - ETS(A, Ad, A)")
+```
+
+## Model Evaluation
+
+### Out-Of-Sample Error
+
+```{r}
+oos_errors <- ets_AAdA_forecast %>% 
+  accuracy(
+    df_val
+  ) %>% filter(
+    is.finite(MAPE)
+  ) %>% 
+  arrange(
+    desc(MAPE)
+  )
+
+oos_errors %>% 
+  mutate(
+    across(where(is.numeric), ~round(., 4))
+  ) %>% 
+  select(
+    -c(
+      .type,
+      MASE,
+      RMSSE
+    )
+  ) %>% 
+  datatable()
+```
+
+```{r, fig.height = 10, fig.width = 7}
+ets_AAdA_forecast %>% 
+  filter(
+    (family == oos_errors$family[1] & store_nbr == oos_errors$store_nbr[1])|
+      (family == oos_errors$family[2] & store_nbr == oos_errors$store_nbr[2])|
+      (family == oos_errors$family[3] & store_nbr == oos_errors$store_nbr[3])|
+      (family == oos_errors$family[4] & store_nbr == oos_errors$store_nbr[4])|
+      (family == oos_errors$family[5] & store_nbr == oos_errors$store_nbr[5])
+  ) %>% 
+  autoplot(
+    df %>% 
+      filter(
+        date >= train_start_date,
+        date <= val_test_split_date,
+        (family == oos_errors$family[1] & store_nbr == oos_errors$store_nbr[1])|
+          (family == oos_errors$family[2] & store_nbr == oos_errors$store_nbr[2])|
+          (family == oos_errors$family[3] & store_nbr == oos_errors$store_nbr[3])|
+          (family == oos_errors$family[4] & store_nbr == oos_errors$store_nbr[4])|
+          (family == oos_errors$family[5] & store_nbr == oos_errors$store_nbr[5])
+      )
+  )
+```
+
+We see that the data is generally not trended and the ETS(A, Ad, A) model produces a flat trend for most of the time series. The only exception is when there are large abnormal, spikes near end of the observation window which causes an upward shock to estimated trend.
+
+### Model Score
+
+```{r}
+prepare_forecast_for_evaluation(
+  df_forecast = ets_AAdA_forecast,
+  df_actuals = df_val
+) %>% 
+  rmsle()
+```
+
+# ETS(A, N, A)
+
+## Model Fitting
+
+The large, abnormal spikes in the end of the observation window cause the trend component to overfit to these spikes, leading to poor forecasts. Thus, we can try to remove the trend component entirely to prevent such overfitting.
+
+```{r}
+sales_ets_ANA <- model(
+  .data = df_train,
+  `No_Trend` = ETS( sales ~ error("A") + trend("N") + season("A") )
+)
+```
+
+```{r}
+ets_ANA_forecast <- sales_ets_ANA %>% 
+  forecast(
+    h = h_length
+  )
+```
+
+```{r, fig.height = 20, fig.width = 12}
+ets_ANA_forecast %>% 
+  filter(
+    family == "GROCERY I"
+  ) %>% 
+  autoplot(
+    df %>% 
+      filter(
+        date >= train_start_date,
+        date <= val_test_split_date
+      )
+  ) + 
+  facet_wrap(~store_nbr, ncol = 3, scales = "free_y") + 
+  labs(title = "Grocery I Sales - ETS(A, N, A)")
+```
+
+## Model Evaluation
+
+### Out-Of-Sample Errors
+
+```{r}
+oos_errors <- ets_ANA_forecast %>% 
+  accuracy(
+    df_val
+  ) %>% filter(
+    is.finite(MAPE)
+  ) %>% 
+  arrange(
+    desc(MAPE)
+  )
+
+oos_errors %>% 
+  mutate(
+    across(where(is.numeric), ~round(., 4))
+  ) %>% 
+  select(
+    -c(
+      .type,
+      MASE,
+      RMSSE
+    )
+  ) %>% 
+  datatable()
+```
+
+```{r, fig.height = 10, fig.width = 7}
+ets_ANA_forecast %>% 
+  filter(
+    (family == oos_errors$family[1] & store_nbr == oos_errors$store_nbr[1])|
+      (family == oos_errors$family[2] & store_nbr == oos_errors$store_nbr[2])|
+      (family == oos_errors$family[3] & store_nbr == oos_errors$store_nbr[3])|
+      (family == oos_errors$family[4] & store_nbr == oos_errors$store_nbr[4])|
+      (family == oos_errors$family[5] & store_nbr == oos_errors$store_nbr[5])
+  ) %>% 
+  autoplot(
+    df %>% 
+      filter(
+        date >= train_start_date,
+        date <= val_test_split_date,
+        (family == oos_errors$family[1] & store_nbr == oos_errors$store_nbr[1])|
+          (family == oos_errors$family[2] & store_nbr == oos_errors$store_nbr[2])|
+          (family == oos_errors$family[3] & store_nbr == oos_errors$store_nbr[3])|
+          (family == oos_errors$family[4] & store_nbr == oos_errors$store_nbr[4])|
+          (family == oos_errors$family[5] & store_nbr == oos_errors$store_nbr[5])
+      )
+  )
+```
+
+The large spikes are still problematic because they throw off the estimated level component $\hat{l}_t$ and $\hat{alpha}$, but the generalization errors are better because the forecasts are roughly flat which better resembles the data.
+
+### Model Score
+
+```{r}
+prepare_forecast_for_evaluation(
+  df_forecast = ets_ANA_forecast,
+  df_actuals = df_val
+) %>% 
+  rmsle()
+```
+
+# Model Selection
+
+The ETS(A, N, A) model had better generalization errors and scored marginally better on RMSLE. We therefore select the ETS(A, N, A) model and evaluate its performance on the 2nd holdout set.
+
+```{r}
+sales_ets_final <- model(
+  .data = bind_rows(
+    df_train,
+    df_val
+  ),
+  `ETS_ANA` = ETS( sales ~ error("A") + trend("N") + season("A") ) 
+)
+
+ets_final_forecast <- sales_ets_final %>% 
+  forecast(h = h_length)
+```
+
+```{r, fig.height = 20, fig.width = 12}
+ets_final_forecast %>% 
+  filter(
+    family == "GROCERY I"
+  ) %>% 
+  autoplot(
+    df %>% 
+      filter(
+        date >= train_start_date
+      )
+  ) + 
+  facet_wrap(~store_nbr, ncol = 3, scales = "free_y") + 
+  labs(title = "Grocery I Sales - ETS(A, N, A)")
+```
+
+## Out-Of-Sample Error
+
+```{r}
+oos_errors <- ets_final_forecast %>% 
+  accuracy(
+    df_test
+  ) %>% filter(
+    is.finite(MAPE)
+  ) %>% 
+  arrange(
+    desc(MAPE)
+  )
+
+oos_errors %>% 
+  mutate(
+    across(where(is.numeric), ~round(., 4))
+  ) %>% 
+  select(
+    -c(
+      .type,
+      MASE,
+      RMSSE
+    )
+  ) %>% 
+  datatable()
+```
+
+```{r, fig.height = 10, fig.width = 7}
+ets_final_forecast %>% 
+  filter(
+    (family == oos_errors$family[1] & store_nbr == oos_errors$store_nbr[1])|
+      (family == oos_errors$family[2] & store_nbr == oos_errors$store_nbr[2])|
+      (family == oos_errors$family[3] & store_nbr == oos_errors$store_nbr[3])|
+      (family == oos_errors$family[4] & store_nbr == oos_errors$store_nbr[4])|
+      (family == oos_errors$family[5] & store_nbr == oos_errors$store_nbr[5])
+  ) %>% 
+  autoplot(
+    df %>% 
+      filter(
+        date >= train_start_date,
+        (family == oos_errors$family[1] & store_nbr == oos_errors$store_nbr[1])|
+          (family == oos_errors$family[2] & store_nbr == oos_errors$store_nbr[2])|
+          (family == oos_errors$family[3] & store_nbr == oos_errors$store_nbr[3])|
+          (family == oos_errors$family[4] & store_nbr == oos_errors$store_nbr[4])|
+          (family == oos_errors$family[5] & store_nbr == oos_errors$store_nbr[5])
+      )
+  )
+```
+
+The observation window ends during or immediately after a large spike for these time series, leading to an overestimated level component.
+
+## Model Score
+
+```{r}
+prepare_forecast_for_evaluation(
+  df_forecast = ets_final_forecast,
+  df_actuals = df_test
+) %>% 
+  rmsle()
+```
+
+The RMSLE for the ETS(A, N, A) model is better than the previous TS Decomposition Model (0.5523) by a relatively large margin.
+
+---
+
